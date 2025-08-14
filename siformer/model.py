@@ -2,6 +2,7 @@ import copy
 import math
 import torch
 import torch.nn as nn
+from sympy.polys.polyconfig import query
 from torch import Tensor
 import torch.nn.functional as F
 from torch.nn.modules.normalization import LayerNorm
@@ -20,146 +21,160 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
+class CommunicatingEncoderLayer(nn.Module):
+    """
+    Một lớp Encoder tùy chỉnh thực hiện 3 giai đoạn:
+    1. Self-Attention trong mỗi luồng.
+    2. Cross-Attention đa hướng giữa các luồng.
+    3. Feed-Forward Network.
+    """
+
+    def __init__(self, d_model_list, nhead_list, d_ff, dropout, activation, attn_layer_factory):
+        super().__init__()
+
+        # Giai đoạn 1: Self-Attention Layers
+        self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
+        self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
+        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
+        self.norm1_lh = LayerNorm(d_model_list[0])
+        self.norm1_rh = LayerNorm(d_model_list[1])
+        self.norm1_body = LayerNorm(d_model_list[2])
+
+        # Giai đoạn 2: Cross-Attention & Fusion Layers
+        self.lh_to_body_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[2],
+                                                     vdim=d_model_list[2], dropout=dropout, batch_first=False)
+        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
+                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
+        self.rh_to_body_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[2],
+                                                     vdim=d_model_list[2], dropout=dropout, batch_first=False)
+        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
+                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
+
+        self.lh_fusion_layer = nn.Linear(d_model_list[0] * 2, d_model_list[0])
+        self.rh_fusion_layer = nn.Linear(d_model_list[1] * 2, d_model_list[1])
+        self.norm2_lh = LayerNorm(d_model_list[0])
+        self.norm2_rh = LayerNorm(d_model_list[1])
+
+        # Giai đoạn 3: Feed-Forward Networks
+        self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), activation, nn.Linear(d_ff, d_model_list[0]))
+        self.ffn_rh = nn.Sequential(nn.Linear(d_model_list[1], d_ff), activation, nn.Linear(d_ff, d_model_list[1]))
+        self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), activation, nn.Linear(d_ff, d_model_list[2]))
+
+        self.norm3_lh = LayerNorm(d_model_list[0])
+        self.norm3_rh = LayerNorm(d_model_list[1])
+        self.norm3_body = LayerNorm(d_model_list[2])
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, src_list, src_mask=None, src_key_padding_mask=None):
+        l_hand_x, r_hand_x, body_x = src_list[0], src_list[1], src_list[2]
+
+        # --- 1. Self-Attention ---
+        # SỬA LỖI: Thêm ", _" để giải nén tuple trả về từ AttentionLayer
+        lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
+
+        rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
+
+        body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        body_x = self.norm1_body(body_x + self.dropout(body_self))
+
+        # --- 2. Cross-Attention & Fusion ---
+        lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
+        lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
+        lh_fused = self.lh_fusion_layer(torch.cat((lh_from_body, lh_from_rh), dim=-1))
+        l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
+
+        rh_from_body, _ = self.rh_to_body_attn(r_hand_x, body_x, body_x)
+        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
+        rh_fused = self.rh_fusion_layer(torch.cat((rh_from_body, rh_from_lh), dim=-1))
+        r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
+
+        # --- 3. Feed-Forward Network ---
+        l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
+        r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
+        body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
+
+        return [l_hand_x, r_hand_x, body_x]
+
+
 class FeatureIsolatedTransformer(nn.Transformer):
     def __init__(self, d_model_list: list, nhead_list: list, num_encoder_layers: int, num_decoder_layers: int,
                  dim_feedforward: int = 2048, dropout: float = 0.1,
-                 activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+                 activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
-                 inner_classifiers_config: list = None, patience: int = 1, use_pyramid_encoder: bool = False,
-                 distil: bool = False, projections_config: list = None,
-                 IA_encoder: bool = False, IA_decoder: bool = False, device=None):
+                 IA_decoder: bool = False, inner_classifiers_config: list = None, patience: int = 1,
+                 **kwargs):  # Dùng **kwargs cho các tham số không dùng đến
 
         super(FeatureIsolatedTransformer, self).__init__(sum(d_model_list), nhead_list[-1], num_encoder_layers,
                                                          num_decoder_layers, dim_feedforward, dropout, activation)
         del self.encoder
+
         self.d_model = sum(d_model_list)
-        self.d_ff = dim_feedforward
-        self.dropout = dropout
-        self.num_encoder_layers = num_encoder_layers
-        self.num_decoder_layers = num_decoder_layers
-        self.device = device
-        self.use_pyramid_encoder = use_pyramid_encoder
-        self.use_IA_encoder = IA_encoder
+
+        # --- Khởi tạo Encoder ---
+        # Hàm factory để tạo các lớp AttentionLayer một cách nhất quán
+        def attn_layer_factory(d_model, n_heads):
+            Attn = ProbAttention if selected_attn == 'prob' else FullAttention
+            return AttentionLayer(Attn(output_attention=output_attention), d_model, n_heads, mix=False)
+
+        # Tạo một danh sách các lớp Encoder giao tiếp. Đây là bộ Encoder DUY NHẤT.
+        self.encoder_layers = nn.ModuleList([
+            CommunicatingEncoderLayer(d_model_list, nhead_list, dim_feedforward, dropout, activation,
+                                      attn_layer_factory)
+            for _ in range(num_encoder_layers)
+        ])
+
+        # Lớp Norm cuối cùng cho mỗi luồng, sẽ được áp dụng sau khi qua tất cả các lớp
+        self.norm_lh = LayerNorm(d_model_list[0])
+        self.norm_rh = LayerNorm(d_model_list[1])
+        self.norm_body = LayerNorm(d_model_list[2])
+
+        # --- Khởi tạo Decoder ---
+        # (Giả định get_custom_decoder không cần thay đổi)
         self.use_IA_decoder = IA_decoder
         self.inner_classifiers_config = inner_classifiers_config
-        self.projections_config = projections_config
         self.patience = patience
-        self.distil = distil
-        self.activation = activation
-        self.selected_attn = selected_attn
-        self.output_attention = output_attention
-        self.l_hand_encoder = self.get_custom_encoder(d_model_list[0], nhead_list[0])
-        self.r_hand_encoder = self.get_custom_encoder(d_model_list[1], nhead_list[1])
-        self.body_encoder = self.get_custom_encoder(d_model_list[2], nhead_list[2])
+        self.num_decoder_layers = num_decoder_layers
+        self.d_ff = dim_feedforward
+
         self.decoder = self.get_custom_decoder(nhead_list[-1])
         self._reset_parameters()
 
-    def get_custom_encoder(self, f_d_model: int, nhead: int):
-        Attn = ProbAttention if self.selected_attn == 'prob' else FullAttention
-        print(f'self.selected_attn {self.selected_attn}')
-
-        if self.use_pyramid_encoder:
-            print("Pyramid encoder")
-            print(f'self.distl {self.distil}')
-            e_layers = get_sequence_list(self.num_encoder_layers)
-            inp_lens = list(range(len(e_layers)))
-            encoders = [
-                Encoder(
-                    [
-                        EncoderLayer(
-                            AttentionLayer(
-                                Attn(output_attention=self.output_attention),
-                                f_d_model, nhead, mix=False),
-                            f_d_model,
-                            self.d_ff,
-                            dropout=self.dropout,
-                            activation=self.activation
-                        ) for _ in range(el)
-                    ],
-                    [
-                        ConvLayer(
-                            f_d_model, self.device
-                        ) for _ in range(self.num_encoder_layers - 1)
-                    ] if self.distil else None,
-                    norm_layer=torch.nn.LayerNorm(f_d_model)
-                ) for el in e_layers]
-
-            encoder = EncoderStack(encoders, inp_lens)
-        else:
-            encoder_layer = TransformerEncoderLayer(f_d_model, nhead, self.d_ff, self.dropout, self.activation)
-            encoder_layer.self_attn = AttentionLayer(
-                Attn(output_attention=self.output_attention),
-                f_d_model, nhead, mix=False
-            )
-            encoder_norm = LayerNorm(f_d_model)
-
-            if self.use_IA_encoder:
-                print("Encoder with input adaptive")
-                self.inner_classifiers_config[0] = f_d_model
-                encoder = PBEEncoder(
-                    encoder_layer, self.num_encoder_layers, norm=encoder_norm,
-                    inner_classifiers_config=self.inner_classifiers_config,
-                    projections_config=self.projections_config,
-                    patience=self.patience
-                )
-            else:
-                print("Normal encoder")
-                encoder = TransformerEncoder(encoder_layer, self.num_encoder_layers, norm=encoder_norm)
-
-        return encoder
-
     def get_custom_decoder(self, nhead):
+        # Hàm này không có gì thay đổi
         decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
         decoder_norm = LayerNorm(self.d_model)
         if self.use_IA_decoder:
-            print("Decoder with with input adaptive")
-            return PBEEDecoder(
-                decoder_layer, self.num_decoder_layers, norm=decoder_norm,
-                inner_classifiers_config=self.inner_classifiers_config, patient=self.patience
-            )
+            return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm,
+                               inner_classifiers_config=self.inner_classifiers_config, patient=self.patience)
         else:
-            print("Normal decoder")
-            return TransformerDecoder(
-                decoder_layer, self.num_decoder_layers, norm=decoder_norm)
+            return TransformerDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm)
 
-    def checker(self, full_src, tgt, is_batched):
-        if not self.batch_first and full_src.size(1) != tgt.size(1) and is_batched:
-            raise RuntimeError("the batch number of src and tgt must be equal")
-        elif self.batch_first and full_src.size(0) != tgt.size(0) and is_batched:
-            raise RuntimeError("the batch number of src and tgt must be equal")
-        if full_src.size(-1) != self.d_model or tgt.size(-1) != self.d_model:
-            raise RuntimeError("the feature number of src and tgt must be equal to d_model")
+    def forward(self, src: list, tgt: Tensor, src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
+                # Các tham số còn lại được gom vào kwargs
+                **kwargs) -> Tensor:
 
-    def forward(self, src: list, tgt: Tensor, src_mask: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None,
-                memory_mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
-                tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None,
-                src_is_causal: Optional[bool] = None, tgt_is_causal: Optional[bool] = None,
-                memory_is_causal: bool = False, training: bool = True) -> Tensor:
+        # Vòng lặp Encoder, truyền trực tiếp list 'src'
+        for layer in self.encoder_layers:
+            src = layer(src, src_mask=src_mask, src_key_padding_mask=src_key_padding_mask)
 
-        full_src = torch.cat(src, dim=-1)
-        self.checker(full_src, tgt, full_src.dim() == 3)
+        # Áp dụng lớp chuẩn hóa cuối cùng cho mỗi luồng
+        l_hand_memory = self.norm_lh(src[0])
+        r_hand_memory = self.norm_rh(src[1])
+        body_memory = self.norm_body(src[2])
 
-        id = uuid.uuid1()
-        # code for concurrency is removed...
-        if self.use_IA_encoder:
-            l_hand_memory = self.l_hand_encoder(src[0], mask=src_mask, src_key_padding_mask=src_key_padding_mask, training=training)
-            r_hand_memory = self.r_hand_encoder(src[1], mask=src_mask, src_key_padding_mask=src_key_padding_mask, training=training)
-            body_memory = self.body_encoder(src[2], mask=src_mask, src_key_padding_mask=src_key_padding_mask, training=training)
-        else:
-            l_hand_memory = self.l_hand_encoder(src[0], mask=src_mask, src_key_padding_mask=src_key_padding_mask)
-            r_hand_memory = self.r_hand_encoder(src[1], mask=src_mask, src_key_padding_mask=src_key_padding_mask)
-            body_memory = self.body_encoder(src[2], mask=src_mask, src_key_padding_mask=src_key_padding_mask)
-
+        # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
         full_memory = torch.cat((l_hand_memory, r_hand_memory, body_memory), -1)
 
-        if self.use_IA_decoder:
-            output = self.decoder(tgt, full_memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
-                                  tgt_key_padding_mask=tgt_key_padding_mask,
-                                  memory_key_padding_mask=memory_key_padding_mask, training=training)
-        else:
-            output = self.decoder(tgt, full_memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
-                                  tgt_key_padding_mask=tgt_key_padding_mask,
-                                  memory_key_padding_mask=memory_key_padding_mask)
+        # Gọi Decoder
+        # Truyền các kwargs vào decoder một cách linh hoạt
+        output = self.decoder(tgt, full_memory,
+                              tgt_mask=kwargs.get('tgt_mask'),
+                              memory_mask=kwargs.get('memory_mask'),
+                              tgt_key_padding_mask=kwargs.get('tgt_key_padding_mask'),
+                              memory_key_padding_mask=kwargs.get('memory_key_padding_mask'))
 
         return output
 
@@ -231,13 +246,34 @@ class SiFormer(nn.Module):
         self.projection = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0)
+        batch_size = l_hand.size(0) # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
+        '''
+            # Giả sử l_hand có shape như này:
+            l_hand = torch.randn(2, 204, 21, 2)
+            print(l_hand.shape)  # torch.Size([2, 204, 21, 2])
+
+            # Các dimensions:
+            # Dimension 0: batch_size = 2
+            # Dimension 1: seq_len = 204  
+            # Dimension 2: keypoints = 21
+            # Dimension 3: coordinates = 2 (x, y)
+            print(l_hand.size())    # torch.Size([2, 204, 21, 2]) - tất cả dimensions
+            print(l_hand.size(0))   # 2 - chỉ dimension 0 (batch_size)
+            print(l_hand.size(1))   # 204 - chỉ dimension 1 (seq_len)
+            print(l_hand.size(2))   # 21 - chỉ dimension 2 (keypoints)
+            print(l_hand.size(3))   # 2 - chỉ dimension 3 (coordinates)
+
+            # Tương đương với:
+            print(l_hand.shape[0])  # 2
+            print(l_hand.shape[1])  # 204
+        '''
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
         new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
         new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
         body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
 
+        
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
         new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
@@ -250,12 +286,18 @@ class SiFormer(nn.Module):
         r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
         body_in = new_body + self.body_embedding  # Shape remains the same
 
+        # print('#########################')
+
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
             [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
         ).transpose(0, 1)
-        # print("transformer_output.shape")
-        # print(transformer_output.shape)
+
+        '''
+        transformer_output = self.transformer(
+            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
+        ).transpose(0, 1)        
+        '''
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
         out = self.projection(transformer_output).squeeze()

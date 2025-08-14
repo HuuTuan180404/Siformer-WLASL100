@@ -57,6 +57,11 @@ def load_dataset(file_location: str, num_remove=0, remove_from=None):
     # TEMP
     labels = df["labels"].to_list()
     # labels = [label + 1 for label in df["labels"].to_list()]
+    # print('##############')
+
+    # print(len(labels))
+    # print('##############')
+
     data = []
 
     for row_index, row in df.iterrows():
@@ -252,21 +257,6 @@ class CzechSLRDataset(torch_data.Dataset):
             l_hand_depth_map = self.transform(l_hand_depth_map)  # (B, 204, 21, 2)
             r_hand_depth_map = self.transform(r_hand_depth_map)  # (B, 204, 21, 2)
             body_depth_map = self.transform(body_depth_map)  # (B, 204, 12, 2)
-
-        # print(f"body_depth_map.shape {body_depth_map.shape}")
-        # print(f"l_hand_depth_map.shape {l_hand_depth_map.shape}")
-        # print(f"r_hand_depth_map.shape {r_hand_depth_map.shape}")
-
-        # print("All ok now")
-        # print(error)
-        #
-        # depth_map = dictionary_to_tensor(depth_map, HAND_IDENTIFIERS+BODY_IDENTIFIERS)
-        #
-        # # Move the landmark position interval to improve performance
-        # depth_map = depth_map - 0.5
-        #
-        # if self.transform:
-        #     depth_map = self.transform(depth_map)
 
         return l_hand_depth_map, r_hand_depth_map, body_depth_map, label
 
