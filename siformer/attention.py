@@ -175,6 +175,7 @@ class AttentionLayer(nn.Module):
         queries = queries.permute(1, 0, 2).type(dtype=torch.float32)
         keys = keys.permute(1, 0, 2).type(dtype=torch.float32)
         values = values.permute(1, 0, 2).type(dtype=torch.float32)
+        # print('queries', queries.shape) = [24, 204, 42]
 
         B, L, _ = queries.shape
         _, S, _ = keys.shape
@@ -199,7 +200,7 @@ class AttentionLayer(nn.Module):
         out = out.permute(1, 0, 2).type(dtype=torch.float32)
 
         # print(f"out from prob_spare attention: {out.shape}")
-        return out
+        return out,self.attention_scores
 
 #    The reference for the code is the following
 #    Title: Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting

@@ -136,7 +136,7 @@ def train(args):
     slr_model.to(device) # Di chuyển mô hình đến thiết bị đã chọn (CPU hoặc GPU).
 
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
-    cel_criterion = nn.CrossEntropyLoss()
+    cel_criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = torch.optim.AdamW(slr_model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=1e-8) # Đây là bộ tối ưu hóa (optimizer). Nó chịu trách nhiệm cập nhật trọng số của mô hình dựa trên giá trị mất mát để cải thiện hiệu suất.
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 80], gamma=0.1)  # 40, 60, 80  Đây là bộ lập lịch tốc độ học (learning rate scheduler). Nó sẽ tự động giảm tốc độ học tại các epoch nhất định (milestones=[60, 80]) để giúp mô hình hội tụ tốt hơn.
 
@@ -170,12 +170,17 @@ def train(args):
 
     # Testing set
     if args.testing_set_path:
+        
         eval_set = CzechSLRDataset(args.testing_set_path)
         eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                  num_workers=args.num_worker)
+        
+        # print("Testing using " + args.testing_set_path + "...\n")
 
     else:
         eval_loader = None
+    
+    
 
     # Final training set refinements
     if args.experimental_train_split:
@@ -285,14 +290,27 @@ def train(args):
     print("\nTesting checkpointed models starting...\n")
     logging.info("\nTesting checkpointed models starting...\n")
 
+    if (os.path.exists(args.testing_set_path)):
+        # print("Testing using " + args.testing_set_path + "...\n")
+        print('file test tồn tại')
+
     top_result, top_result_name = 0, ""
+    checkpoint_index=10
 
     if eval_loader:
-        for i in range(checkpoint_index):
+        print('test')
+        for i in range(checkpoint_index):            
             for checkpoint_id in ["t", "v"]:
-                # tested_model = VisionTransformer(dim=2, mlp_dim=108, num_classes=100, depth=12, heads=8)
-                tested_model = torch.load(
-                    "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth")
+                path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
+
+                if (os.path.exists(path_to_load)):
+                    print('file pth tồn tại')
+                else:
+                    print('file pth không tồn tại')
+
+
+                tested_model = torch.load(path_to_load, weights_only=False)
+
                 tested_model.train(False)
                 _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
                 _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
@@ -308,6 +326,8 @@ def train(args):
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
         logging.info("\nThe top result was recorded at " + str(
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
+    else:
+        print('khong test')
 
     # PLOT 0: Performance (loss, accuracies) chart plotting
     if args.plot_stats:
@@ -350,7 +370,21 @@ def train(args):
     logging.info("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
+#     args = parser.parse_args()
+#     train(args)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
+
+    # Đặt default cho args giống file .sh
+    parser.set_defaults(
+        experiment_name="WLASL100",
+        training_set_path="datasets/WLASL100_train_25fps.csv",
+        testing_set_path="datasets/WLASL100_val_25fps.csv",
+        validation_set="split-from-train",
+        num_classes=100
+    )
+
     args = parser.parse_args()
     train(args)

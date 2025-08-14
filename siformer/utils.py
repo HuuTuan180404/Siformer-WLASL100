@@ -12,6 +12,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
     train_time_sec_list = []
     for i, data in enumerate(dataloader):
         l_hands, r_hands, bodies, labels = data
+
         l_hands = l_hands.to(device)
         r_hands = r_hands.to(device)
         bodies = bodies.to(device)
@@ -106,7 +107,7 @@ def evaluate_top_k(model, dataloader, device, k=5):
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
                 # Statistics
-                if int(label[0][0]) in torch.topk(output, k).indices.tolist():
+                if int(label[0]) in torch.topk(output, k).indices.tolist():
                     pred_correct += 1
 
                 pred_all += 1
