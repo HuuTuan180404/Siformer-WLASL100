@@ -16,9 +16,42 @@ from siformer.utils import get_sequence_list
 
 import uuid
 
+import torch_geometric.nn as pyg_nn
+from torch_geometric.utils import add_self_loops
+
 
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
+
+def create_hand_graph():
+    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
+    # Định nghĩa các cạnh nối các khớp tay
+    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
+    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
+    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
+    return edge_index
+
+def create_body_graph():
+    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
+    body_edges = [...]
+    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
+    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
+    return edge_index
+
+
+class SpatialGCNEncoder(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
+        super().__init__()
+        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
+        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, edge_index):
+        x = self.gcn1(x, edge_index)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = self.gcn2(x, edge_index)
+        return x
 
 
 class CommunicatingEncoderLayer(nn.Module):
@@ -41,17 +74,15 @@ class CommunicatingEncoderLayer(nn.Module):
         self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
-        self.lh_to_body_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[2],
-                                                     vdim=d_model_list[2], dropout=dropout, batch_first=False)
         self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
                                                    vdim=d_model_list[1], dropout=dropout, batch_first=False)
-        self.rh_to_body_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[2],
-                                                     vdim=d_model_list[2], dropout=dropout, batch_first=False)
+
         self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
                                                    vdim=d_model_list[0], dropout=dropout, batch_first=False)
 
-        self.lh_fusion_layer = nn.Linear(d_model_list[0] * 2, d_model_list[0])
-        self.rh_fusion_layer = nn.Linear(d_model_list[1] * 2, d_model_list[1])
+        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
+        self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
+        self.rh_fusion_layer = nn.Linear(d_model_list[1], d_model_list[1])
         self.norm2_lh = LayerNorm(d_model_list[0])
         self.norm2_rh = LayerNorm(d_model_list[1])
 
@@ -69,7 +100,6 @@ class CommunicatingEncoderLayer(nn.Module):
         l_hand_x, r_hand_x, body_x = src_list[0], src_list[1], src_list[2]
 
         # --- 1. Self-Attention ---
-        # SỬA LỖI: Thêm ", _" để giải nén tuple trả về từ AttentionLayer
         lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
         l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
 
@@ -80,14 +110,13 @@ class CommunicatingEncoderLayer(nn.Module):
         body_x = self.norm1_body(body_x + self.dropout(body_self))
 
         # --- 2. Cross-Attention & Fusion ---
-        lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
+        # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
         lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
-        lh_fused = self.lh_fusion_layer(torch.cat((lh_from_body, lh_from_rh), dim=-1))
+        lh_fused = self.lh_fusion_layer(lh_from_rh)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
 
-        rh_from_body, _ = self.rh_to_body_attn(r_hand_x, body_x, body_x)
         rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
-        rh_fused = self.rh_fusion_layer(torch.cat((rh_from_body, rh_from_lh), dim=-1))
+        rh_fused = self.rh_fusion_layer(rh_from_lh)
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
 
         # --- 3. Feed-Forward Network ---
@@ -179,57 +208,13 @@ class FeatureIsolatedTransformer(nn.Transformer):
         return output
 
 
-class AbsolutePE(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
-        super(AbsolutePE, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        pe = torch.zeros(max_len, d_model)  # positional encoding
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        pe[:, 0::2] = torch.sin((position * div_term)*(d_model/max_len))
-        pe[:, 1::2] = torch.cos((position * div_term)*(d_model/max_len))
-        pe = scale_factor * pe.unsqueeze(0)
-        # reshape the matrix shape to met the input shape
-        # pe = pe.squeeze(0).unsqueeze(1)
-        self.register_buffer('pe', pe)  # this stores the variable in the state_dict (used for non-trainable variables)
-
-    def forward(self, x):
-        x = x + self.pe
-        return self.dropout(x)
-
-
-class SpoTer(nn.Module):
-    def __init__(self, num_classes, num_hid=108, num_enc_layers=3, num_dec_layers=2, seq_len=204):
-        super(SpoTer, self).__init__()
-        print("Normal transformer")
-        self.embedding = AbsolutePE(d_model=num_hid,max_len=seq_len)
-        self.class_query = nn.Parameter(torch.rand(1, num_hid))
-        self.transformer = nn.Transformer(num_hid, 9, num_enc_layers, num_dec_layers)
-        custom_decoder_layer = DecoderLayer(self.transformer.d_model, self.transformer.nhead, 2048, 0.1, "relu")
-        self.transformer.decoder.layers = _get_clones(custom_decoder_layer, self.transformer.decoder.num_layers)
-        self.projection = nn.Linear(num_hid, num_classes)
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}")
-
-    def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0)
-
-        inputs = torch.cat((l_hand, r_hand, body), -2)
-        inputs = inputs.view(inputs.size(0), inputs.size(1), inputs.size(2) * inputs.size(3))
-
-        new_inputs = self.embedding(inputs)
-        new_inputs = new_inputs.permute(1, 0, 2).type(dtype=torch.float32)
-
-        transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
-        out = self.projection(transformer_out).squeeze()
-        return out
-
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
+
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
@@ -313,3 +298,50 @@ class SiFormer(nn.Module):
                 frame_pos[i, j] = frame_pos[i, j - 1]
         frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
         return frame_pos
+
+
+class AbsolutePE(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
+        super(AbsolutePE, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)  # positional encoding
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin((position * div_term)*(d_model/max_len))
+        pe[:, 1::2] = torch.cos((position * div_term)*(d_model/max_len))
+        pe = scale_factor * pe.unsqueeze(0)
+        # reshape the matrix shape to met the input shape
+        # pe = pe.squeeze(0).unsqueeze(1)
+        self.register_buffer('pe', pe)  # this stores the variable in the state_dict (used for non-trainable variables)
+
+    def forward(self, x):
+        x = x + self.pe
+        return self.dropout(x)
+
+
+class SpoTer(nn.Module):
+    def __init__(self, num_classes, num_hid=108, num_enc_layers=3, num_dec_layers=2, seq_len=204):
+        super(SpoTer, self).__init__()
+        print("Normal transformer")
+        self.embedding = AbsolutePE(d_model=num_hid,max_len=seq_len)
+        self.class_query = nn.Parameter(torch.rand(1, num_hid))
+        self.transformer = nn.Transformer(num_hid, 9, num_enc_layers, num_dec_layers)
+        custom_decoder_layer = DecoderLayer(self.transformer.d_model, self.transformer.nhead, 2048, 0.1, "relu")
+        self.transformer.decoder.layers = _get_clones(custom_decoder_layer, self.transformer.decoder.num_layers)
+        self.projection = nn.Linear(num_hid, num_classes)
+        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}")
+
+    def forward(self, l_hand, r_hand, body, training):
+        batch_size = l_hand.size(0)
+
+        inputs = torch.cat((l_hand, r_hand, body), -2)
+        inputs = inputs.view(inputs.size(0), inputs.size(1), inputs.size(2) * inputs.size(3))
+
+        new_inputs = self.embedding(inputs)
+        new_inputs = new_inputs.permute(1, 0, 2).type(dtype=torch.float32)
+
+        transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
+        out = self.projection(transformer_out).squeeze()
+        return out
+
