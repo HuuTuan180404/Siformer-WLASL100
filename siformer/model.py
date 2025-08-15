@@ -9,6 +9,11 @@ from torch.nn.modules.normalization import LayerNorm
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
 from typing import Optional, Union, Callable
+
+from torch_geometric.nn import GCNConv
+
+# from torch_geometric.graphgym import GCNConv
+
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention
 from siformer.decoder import DecoderLayer, PBEEDecoder
 from siformer.encoder import Encoder, EncoderLayer, ConvLayer, EncoderStack, PBEEncoder
@@ -53,6 +58,44 @@ class SpatialGCNEncoder(nn.Module):
         x = self.gcn2(x, edge_index)
         return x
 
+
+class AnatomicalGCN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Define hand anatomy connections
+        self.hand_edges = self._create_hand_topology()
+        self.body_edges = self._create_body_topology()
+
+        # Multi-scale GCN layers
+        self.gcn_layers = nn.ModuleList([
+            GCNConv(2, 16),  # Raw coordinates -> features
+            GCNConv(16, 32),  # Local patterns
+            GCNConv(32, 64)  # Global hand shape
+        ])
+
+    def _create_hand_topology(self):
+        # Real anatomical connections
+        edges = [
+            # Thumb chain: wrist -> thumb_cmc -> thumb_mcp -> thumb_ip -> thumb_tip
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            # Index chain: wrist -> index_mcp -> index_pip -> index_dip -> index_tip
+            [0, 5], [5, 6], [6, 7], [7, 8],
+            # Middle chain
+            [0, 9], [9, 10], [10, 11], [11, 12],
+            # Ring chain
+            [0, 13], [13, 14], [14, 15], [15, 16],
+            # Pinky chain
+            [0, 17], [17, 18], [18, 19], [19, 20]
+        ]
+        return torch.tensor(edges).t().contiguous()
+
+    def _create_body_topology(self):
+        edges = [
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            [0, 5], [5, 6], [6, 7], [7, 8],
+            [0, 9], [9, 10], [10, 11]
+        ]
+        return torch.tensor(edges).t().contiguous()
 
 class CommunicatingEncoderLayer(nn.Module):
     """
