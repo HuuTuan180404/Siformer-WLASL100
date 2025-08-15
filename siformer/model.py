@@ -28,74 +28,213 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-def create_hand_graph():
-    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
-    # Định nghĩa các cạnh nối các khớp tay
-    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
-    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
-    return edge_index
-
-def create_body_graph():
-    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
-    body_edges = [...]
-    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
-    return edge_index
-
-
 class SpatialGCNEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
-        super().__init__()
-        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
-        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
+    def __init__(self, input_dim=2, hidden_dims= [16, 32, 64], output_dim=32, dropout=0.1, use_batch_norm=True):
+        super(SpatialGCNEncoder,self).__init__()
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.use_batch_norm = use_batch_norm
+
+        dims = [input_dim] + hidden_dims + [output_dim] # [2, 16, 32, 64, 32]
+
+        self.gcn_layers = nn.ModuleList()
+        self.batch_norms = nn.ModuleList()
+
+        for i in range(len(dims) - 1):
+            # Sử dụng GCNConv với improved aggregation
+            self.gcn_layers.append(
+                pyg_nn.GCNConv(dims[i], dims[i + 1], improved=True, cached=False, add_self_loops=True)
+            )
+
+            if use_batch_norm and i < len(dims) - 2:  # Không batch norm ở layer cuối
+                self.batch_norms.append(nn.BatchNorm1d(dims[i + 1]))
+
         self.dropout = nn.Dropout(dropout)
 
+        if input_dim != output_dim:
+            self.residual_proj = nn.Linear(input_dim, output_dim)
+        else:
+            self.residual_proj = None
+
     def forward(self, x, edge_index):
-        x = self.gcn1(x, edge_index)
-        x = F.relu(x)
-        x = self.dropout(x)
-        x = self.gcn2(x, edge_index)
+        """
+        Args:
+            x: Node features [num_nodes, input_dim]
+            edge_index: Edge connectivity [2, num_edges]
+
+        Returns:
+            encoded_features: [num_nodes, output_dim]
+        """
+        identity = x
+
+        for i, gcn_layer in enumerate(self.gcn_layers):
+            x = gcn_layer(x, edge_index)
+
+            # Apply batch norm (except last layer)
+            if self.use_batch_norm and i < len(self.gcn_layers) - 1:
+                x = self.batch_norms[i](x.transpose(1, 2)).transpose(1, 2)
+
+            # Apply activation (except last layer)
+            if i < len(self.gcn_layers) - 1:
+                x = F.relu(x)
+                x = self.dropout(x)
+
+        # Residual connection
+        if self.residual_proj is not None:
+            identity = self.residual_proj(identity)
+        if x.shape == identity.shape:
+            x = x + identity
+
         return x
 
 
-class AnatomicalGCN(nn.Module):
+class HandGraphTopology:
+    """Định nghĩa cấu trúc graph cho bàn tay theo MediaPipe Hand landmarks"""
+
     def __init__(self):
-        super().__init__()
-        # Define hand anatomy connections
-        self.hand_edges = self._create_hand_topology()
-        self.body_edges = self._create_body_topology()
+        # MediaPipe Hand có 21 landmarks (0-20)
+        self.hand_connections = self._create_hand_edges()
+        self.body_connections = self._create_body_edges()
 
-        # Multi-scale GCN layers
-        self.gcn_layers = nn.ModuleList([
-            GCNConv(2, 16),  # Raw coordinates -> features
-            GCNConv(16, 32),  # Local patterns
-            GCNConv(32, 64)  # Global hand shape
-        ])
+    def _create_hand_edges(self):
+        """
+        Tạo edges theo cấu trúc anatomical thực tế
+        MediaPipe Hand landmarks:
+        0: WRIST
+        1-4: THUMB (THUMB_CMC, THUMB_MCP, THUMB_IP, THUMB_TIP)
+        5-8: INDEX (INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP)
+        9-12: MIDDLE (MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP)
+        13-16: RING (RING_MCP, RING_PIP, RING_DIP, RING_TIP)
+        17-20: PINKY (PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP)
+        """
 
-    def _create_hand_topology(self):
-        # Real anatomical connections
         edges = [
             # Thumb chain: wrist -> thumb_cmc -> thumb_mcp -> thumb_ip -> thumb_tip
-            [0, 1], [1, 2], [2, 3], [3, 4],
+            [0, 20], [20, 19], [19, 18], [18, 17],
             # Index chain: wrist -> index_mcp -> index_pip -> index_dip -> index_tip
-            [0, 5], [5, 6], [6, 7], [7, 8],
+            [0, 4], [4, 3], [3, 2], [2, 1],
             # Middle chain
-            [0, 9], [9, 10], [10, 11], [11, 12],
+            [0, 8], [8, 7], [7, 6], [6, 5],
             # Ring chain
-            [0, 13], [13, 14], [14, 15], [15, 16],
+            [0, 12], [12, 11], [11, 10], [10, 9],
             # Pinky chain
-            [0, 17], [17, 18], [18, 19], [19, 20]
+            [0, 16], [16, 15], [15, 14], [14, 13]
         ]
-        return torch.tensor(edges).t().contiguous()
 
-    def _create_body_topology(self):
-        edges = [
-            [0, 1], [1, 2], [2, 3], [3, 4],
-            [0, 5], [5, 6], [6, 7], [7, 8],
-            [0, 9], [9, 10], [10, 11]
+        # Cross-finger connections (knuckles)
+        knuckle_connections = [
+            [4, 8],  # INDEX_MCP -> MIDDLE_MCP
+            [8, 12],  # MIDDLE_MCP -> RING_MCP
+            [12, 16],  # RING_MCP -> PINKY_MCP
         ]
-        return torch.tensor(edges).t().contiguous()
+        edges.extend(knuckle_connections)
+
+        # Convert to tensor và add reverse edges (undirected graph)
+        edges_tensor = torch.tensor(edges, dtype=torch.long)
+        reverse_edges = edges_tensor.flip(dims=[1])
+        all_edges = torch.cat([edges_tensor, reverse_edges], dim=0)
+
+        return all_edges.t().contiguous()  # Shape: [2, num_edges]
+
+    def _create_body_edges(self):
+        """
+        Tạo edges cho body keypoints (12 points theo WLASL dataset)
+        Giả định body points: shoulders, elbows, wrists, hips, torso points
+        """
+        # Định nghĩa connections dựa trên skeleton structure
+        # body_edges = [
+        #     [0, 1],  # left_shoulder -> right_shoulder
+        #     [0, 2],  # left_shoulder -> left_elbow
+        #     [1, 3],  # right_shoulder -> right_elbow
+        #     [2, 4],  # left_elbow -> left_wrist
+        #     [3, 5],  # right_elbow -> right_wrist
+        #     [6, 7],  # left_hip -> right_hip
+        #     [0, 8],  # left_shoulder -> neck/spine
+        #     [1, 8],  # right_shoulder -> neck/spine
+        #     [8, 9],  # neck -> torso_center
+        #     [9, 6],  # torso_center -> left_hip
+        #     [9, 7],  # torso_center -> right_hip
+        # ]
+
+        body_edges =[
+            [1, 0], [0, 2], [2, 4],
+            [1, 0], [0, 3], [3, 5],
+            [1, 6], [6, 8], [8, 10],
+            [1, 7], [7, 9], [9, 11]
+        ]
+
+        edges_tensor = torch.tensor(body_edges, dtype=torch.long)
+        reverse_edges = edges_tensor.flip(dims=[1])
+        all_edges = torch.cat([edges_tensor, reverse_edges], dim=0)
+
+        return all_edges.t().contiguous()
+
+
+class MultiPartGCNEncoder(nn.Module):
+    """
+    GCN Encoder cho multiple body parts (left_hand, right_hand, body)
+    """
+
+    def __init__(self, gcn_config=None):
+        super(MultiPartGCNEncoder, self).__init__()
+
+        if gcn_config is None:
+            gcn_config = {
+                'input_dim': 2,
+                'hidden_dims': [16, 32],
+                'output_dim': 32,
+                'dropout': 0.1
+            }
+
+        # Tạo topology
+        self.topology = HandGraphTopology()
+
+        # GCN encoders cho từng body part
+        self.left_hand_gcn = SpatialGCNEncoder(**gcn_config)
+        self.right_hand_gcn = SpatialGCNEncoder(**gcn_config)
+
+        # Body GCN có thể khác config vì số joints khác
+        body_config = gcn_config.copy()
+        body_config['output_dim'] = 24  # Match với body dimension trong code gốc
+        self.body_gcn = SpatialGCNEncoder(**body_config)
+
+        # Cache edge indices
+        self.register_buffer('hand_edge_index', self.topology.hand_connections)
+        self.register_buffer('body_edge_index', self.topology.body_connections)
+
+    def forward(self, left_hand, right_hand, body):
+        """
+        Args:
+            left_hand: [batch, seq_len, 21, 2]
+            right_hand: [batch, seq_len, 21, 2]
+            body: [batch, seq_len, 12, 2]
+
+        Returns:
+            encoded_left_hand: [batch, seq_len, 21 * output_dim]
+            encoded_right_hand: [batch, seq_len, 21 * output_dim]
+            encoded_body: [batch, seq_len, 12 * body_output_dim]
+        """
+        batch_size, seq_len = left_hand.shape[:2]
+        num_lh_nodes = left_hand.shape[2]
+        num_rh_nodes = right_hand.shape[2]
+        num_body_nodes = body.shape[2]
+
+        # Reshape để process frame by frame
+        lh_reshaped = left_hand.view(batch_size * seq_len, num_lh_nodes, -1)
+        rh_reshaped = right_hand.view(batch_size * seq_len, num_rh_nodes, -1)
+        body_reshaped = body.view(batch_size * seq_len, num_body_nodes, -1)
+
+        encoded_lh_all = self.left_hand_gcn(lh_reshaped, self.hand_edge_index)
+        encoded_rh_all = self.right_hand_gcn(rh_reshaped, self.hand_edge_index)
+        encoded_body_all = self.body_gcn(body_reshaped, self.body_edge_index)
+
+        encoded_lh = encoded_lh_all.view(batch_size, seq_len, -1)
+        encoded_rh = encoded_rh_all.view(batch_size, seq_len, -1)
+        encoded_body = encoded_body_all.view(batch_size, seq_len, -1)
+
+        return encoded_lh, encoded_rh, encoded_body
+
 
 class CommunicatingEncoderLayer(nn.Module):
     """
@@ -254,9 +393,31 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
-                 seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
+                 seq_len=204, device=None, IA_encoder = True, IA_decoder = False, use_gcn=True):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
+
+        self.use_gcn = use_gcn
+
+        if use_gcn:
+            # GCN Spatial Encoder
+            gcn_config = {
+                'input_dim': 2,
+                'hidden_dims': [16, 32],
+                'output_dim': 32,  # Sẽ tạo ra 21*32=672 dim cho mỗi hand
+                'dropout': 0.1
+            }
+            self.spatial_gcn = MultiPartGCNEncoder(gcn_config)
+
+            # Projection layers để match với original dimensions
+            self.lh_projection = nn.Linear(21 * 32, 42)  # 672 -> 42
+            self.rh_projection = nn.Linear(21 * 32, 42)  # 672 -> 42
+            self.body_projection = nn.Linear(12 * 24, 24)  # 288 -> 24
+        else:
+            # Original flattening approach
+            self.lh_projection = None
+            self.rh_projection = None
+            self.body_projection = None
 
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
@@ -274,6 +435,11 @@ class SiFormer(nn.Module):
         self.projection = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
+
+        l_hand = l_hand.float()
+        r_hand = r_hand.float()
+        body = body.float()
+
         batch_size = l_hand.size(0) # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
         '''
             # Giả sử l_hand có shape như này:
@@ -295,24 +461,42 @@ class SiFormer(nn.Module):
             print(l_hand.shape[0])  # 2
             print(l_hand.shape[1])  # 204
         '''
+
+        if self.use_gcn:
+            # === GCN SPATIAL ENCODING ===
+            # Input: [batch, seq_len, joints, coordinates]
+            # GCN xử lý spatial relationships giữa các joints
+            encoded_lh, encoded_rh, encoded_body = self.spatial_gcn(l_hand, r_hand, body)
+
+            # Project về original dimensions
+            new_l_hand = self.lh_projection(encoded_lh)  # [batch, seq_len, 42]
+            new_r_hand = self.rh_projection(encoded_rh)  # [batch, seq_len, 42]
+            new_body = self.body_projection(encoded_body)  # [batch, seq_len, 24]
+
+        else:
+            # === ORIGINAL FLATTENING (for comparison) ===
+            new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
+            new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
+            new_body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
+
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
-        body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
+        # new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
+        # new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
+        # body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
 
         
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
         new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
         new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
+        new_body = new_body.permute(1, 0, 2).type(dtype=torch.float32)
 
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
-        body_in = new_body + self.body_embedding  # Shape remains the same
+        l_hand_in = new_l_hand + self.l_hand_embedding.float()  # Shape remains the same
+        r_hand_in = new_r_hand + self.r_hand_embedding.float()  # Shape remains the same
+        body_in = new_body + self.body_embedding.float()  # Shape remains the same
 
         # print('#########################')
 

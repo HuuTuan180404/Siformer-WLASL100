@@ -5,6 +5,9 @@ import pandas as pd
 import torch.utils.data as torch_data
 
 from random import randrange
+
+from mpmath.identification import transforms
+
 from augmentations import *
 from normalization.body_normalization import BODY_IDENTIFIERS
 from normalization.hand_normalization import HAND_IDENTIFIERS
@@ -265,4 +268,6 @@ class CzechSLRDataset(torch_data.Dataset):
 
 
 if __name__ == "__main__":
-    pass
+    # pass
+    # transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)])
+    data= CzechSLRDataset(dataset_filename='WLASL100_val_25fps.csv', transform=None, augmentations=True)
