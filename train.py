@@ -215,37 +215,37 @@ def train(args):
                                                                   device, scheduler=scheduler)
         end_time = time.time()
         train_time = end_time - start_time
-
+    
         losses.append(train_loss.item() / len(train_loader))
         train_accs.append(train_acc)
-
+    
         if args.record_training_time:
             avg_train_time_sec_list.append(avg_train_time)
             total_train_time += train_time
-
+    
         if val_loader:
             slr_model.train(False)
             _, _, val_acc = evaluate(slr_model, val_loader, device)
             slr_model.train(True)
             val_accs.append(val_acc)
-
+    
         # Save checkpoints if they are best in the current subset
         if args.save_checkpoints:
             if train_acc > top_train_acc:
                 top_train_acc = train_acc
                 torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_t_" + str(
                     checkpoint_index) + ".pth")
-
+    
             if val_acc > top_val_acc:
                 top_val_acc = val_acc
                 torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_v_" + str(
                     checkpoint_index) + ".pth")
-
+    
                 print(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
                       + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
                 logging.info(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
                              + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
-
+    
         if epoch % args.log_freq == 0:
             print(
                 "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
@@ -259,22 +259,22 @@ def train(args):
             logging.info(
                 f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
             )
-
+    
             if val_loader:
                 print("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
                 logging.info("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
-
+    
                 print("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
                 logging.info("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
-
+    
             print("")
             logging.info("")
-
+    
         # Reset the top accuracies on static subsets
         if epoch % 10 == 0:
             top_train_acc, top_val_acc = 0, 0
             checkpoint_index += 1
-
+    
         lr_progress.append(optimizer.param_groups[0]["lr"])
 
     if args.record_training_time:
@@ -346,10 +346,10 @@ def train(args):
             ax.plot(range(1, len(val_accs) + 1), val_accs, c="#E0A938", label="Validation accuracy")
         
         if len(test_accs_t)>0:
-            ax.plot(range(1, len(test_accs_t) + 1), test_accs, c="#3366FF", label="Test accuracy (t)")
+            ax.plot(range(1, len(test_accs_t) + 1), test_accs_t, c="#3366FF", label="Test accuracy (t)")
         
         if len(test_accs_v)>0:
-            ax.plot(range(1, len(test_accs_v) + 1), test_accs, c="#33FF70", label="Test accuracy (v)")
+            ax.plot(range(1, len(test_accs_v) + 1), test_accs_v, c="#33FF70", label="Test accuracy (v)")
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
