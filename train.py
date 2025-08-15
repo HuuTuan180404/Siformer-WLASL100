@@ -138,7 +138,8 @@ def train(args):
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
     cel_criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = torch.optim.AdamW(slr_model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=1e-8) # Đây là bộ tối ưu hóa (optimizer). Nó chịu trách nhiệm cập nhật trọng số của mô hình dựa trên giá trị mất mát để cải thiện hiệu suất.
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 80], gamma=0.1)  # 40, 60, 80  Đây là bộ lập lịch tốc độ học (learning rate scheduler). Nó sẽ tự động giảm tốc độ học tại các epoch nhất định (milestones=[60, 80]) để giúp mô hình hội tụ tốt hơn.
+    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 80], gamma=0.1)  # 40, 60, 80  Đây là bộ lập lịch tốc độ học (learning rate scheduler). Nó sẽ tự động giảm tốc độ học tại các epoch nhất định (milestones=[60, 80]) để giúp mô hình hội tụ tốt hơn.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=0)
 
     # Ensure that the path for checkpointing and for images both exist
     Path("out-checkpoints/" + args.experiment_name + "/").mkdir(parents=True, exist_ok=True)
@@ -156,7 +157,6 @@ def train(args):
         val_set = CzechSLRDataset(args.validation_set_path)
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                 num_workers=args.num_worker)
-
     elif args.validation_set == "split-from-train":
         train_set, val_set = __balance_val_split(train_set, 0.2)
 
@@ -164,7 +164,6 @@ def train(args):
         val_set.augmentations = False
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                 num_workers=args.num_worker)
-
     else:
         val_loader = None
 
@@ -175,13 +174,9 @@ def train(args):
         eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                  num_workers=args.num_worker)
         
-        # print("Testing using " + args.testing_set_path + "...\n")
-
     else:
         eval_loader = None
     
-    
-
     # Final training set refinements
     if args.experimental_train_split:
         train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
@@ -220,6 +215,9 @@ def train(args):
                                                                   device, scheduler=scheduler)
         end_time = time.time()
         train_time = end_time - start_time
+
+        losses.append(train_loss.item() / len(train_loader))
+        train_accs.append(train_acc)
 
         if args.record_training_time:
             avg_train_time_sec_list.append(avg_train_time)
@@ -298,6 +296,9 @@ def train(args):
     checkpoint_index=10
 
     if eval_loader:
+        test_accs_t=[]
+        test_accs_v=[]
+
         print('test')
         for i in range(checkpoint_index):            
             for checkpoint_id in ["t", "v"]:
@@ -313,6 +314,12 @@ def train(args):
 
                 tested_model.train(False)
                 _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
+
+                if checkpoint_id == "v":
+                    test_accs_v.append(eval_acc)
+                else:
+                    test_accs_t.append(eval_acc)
+
                 _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
 
                 if eval_acc > top_result:
@@ -337,6 +344,12 @@ def train(args):
 
         if val_loader:
             ax.plot(range(1, len(val_accs) + 1), val_accs, c="#E0A938", label="Validation accuracy")
+        
+        if len(test_accs_t)>0:
+            ax.plot(range(1, len(test_accs_t) + 1), test_accs, c="#3366FF", label="Test accuracy (t)")
+        
+        if len(test_accs_v)>0:
+            ax.plot(range(1, len(test_accs_v) + 1), test_accs, c="#33FF70", label="Test accuracy (v)")
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
