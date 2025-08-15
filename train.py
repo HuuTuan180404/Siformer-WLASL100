@@ -346,10 +346,10 @@ def train(args):
             ax.plot(range(1, len(val_accs) + 1), val_accs, c="#E0A938", label="Validation accuracy")
         
         if len(test_accs_t)>0:
-            ax.plot(range(1, len(test_accs_t) + 1), test_accs, c="#3366FF", label="Test accuracy (t)")
+            ax.plot(range(1, len(test_accs_t) + 1), test_accs_t, c="#3366FF", label="Test accuracy (t)")
         
         if len(test_accs_v)>0:
-            ax.plot(range(1, len(test_accs_v) + 1), test_accs, c="#33FF70", label="Test accuracy (v)")
+            ax.plot(range(1, len(test_accs_v) + 1), test_accs_v, c="#33FF70", label="Test accuracy (v)")
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 

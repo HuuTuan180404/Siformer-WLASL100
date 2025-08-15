@@ -10,7 +10,7 @@ from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderL
 
 from typing import Optional, Union, Callable
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention
-from siformer.decoder import DecoderLayer, PBEEDecoder
+from siformer.decoder import DecoderLayer, PBEEDecoder, HierarchicalPBEEDecoder
 from siformer.encoder import Encoder, EncoderLayer, ConvLayer, EncoderStack, PBEEncoder
 from siformer.utils import get_sequence_list
 
@@ -23,36 +23,46 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-def create_hand_graph():
-    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
-    # Định nghĩa các cạnh nối các khớp tay
-    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
-    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
-    return edge_index
 
-def create_body_graph():
-    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
-    body_edges = [...]
-    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
-    return edge_index
-
-
-class SpatialGCNEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
+# Lớp này sẽ thay thế cho nn.TransformerDecoder
+class HierarchicalDecoder(nn.Module):
+    def __init__(self, decoder_layer, num_layers, norm=None, d_model=108, num_classes=100, patience=2):
         super().__init__()
-        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
-        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
-        self.dropout = nn.Dropout(dropout)
+        self.layers = nn.ModuleList([decoder_layer for _ in range(num_layers)])
+        self.num_layers = num_layers
+        self.norm = norm
+        self.patience = patience  # Số lớp liên tiếp phải đồng ý để thoát sớm
 
-    def forward(self, x, edge_index):
-        x = self.gcn1(x, edge_index)
-        x = F.relu(x)
-        x = self.dropout(x)
-        x = self.gcn2(x, edge_index)
-        return x
+        # Tạo một danh sách các lớp phân loại, một cho mỗi "lối ra"
+        self.classifiers = nn.ModuleList([
+            nn.Linear(d_model, num_classes) for _ in range(num_layers)
+        ])
 
+    def forward(self, tgt, memory, training=False, **kwargs):
+        output = tgt
+        intermediate_outputs = []
+
+        for i, layer in enumerate(self.layers):
+            # Đi qua một lớp decoder
+            output = layer(output, memory, **kwargs)
+
+            # Chuẩn hóa (nếu có) và đưa qua lớp phân loại tương ứng
+            normalized_output = self.norm(output) if self.norm is not None else output
+            prediction = self.classifiers[i](normalized_output)
+            intermediate_outputs.append(prediction)
+
+            # Logic thoát sớm khi không huấn luyện (khi suy luận)
+            if not training and i >= self.patience - 1:
+                # Lấy ra 'patience' dự đoán cuối cùng
+                recent_preds = [torch.argmax(p.squeeze(0), dim=-1) for p in intermediate_outputs[-self.patience:]]
+
+                # Kiểm tra xem tất cả có giống nhau không
+                if all(torch.equal(p, recent_preds[0]) for p in recent_preds):
+                    # Nếu tất cả giống nhau, trả về tất cả dự đoán cho đến hiện tại và thoát
+                    return intermediate_outputs
+
+        # Nếu đang huấn luyện hoặc không thể thoát sớm, trả về tất cả dự đoán
+        return intermediate_outputs
 
 class CommunicatingEncoderLayer(nn.Module):
     """
@@ -132,7 +142,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
                  dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
-                 IA_decoder: bool = False, inner_classifiers_config: list = None, patience: int = 1,
+                 IA_decoder: bool = False, inner_classifiers_config: list = None, patience: int = 1, use_hierarchical_decoder: bool = True,
                  **kwargs):  # Dùng **kwargs cho các tham số không dùng đến
 
         super(FeatureIsolatedTransformer, self).__init__(sum(d_model_list), nhead_list[-1], num_encoder_layers,
@@ -161,24 +171,31 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
         # --- Khởi tạo Decoder ---
         # (Giả định get_custom_decoder không cần thay đổi)
+        self.use_hierarchical_decoder = use_hierarchical_decoder
         self.use_IA_decoder = IA_decoder
         self.inner_classifiers_config = inner_classifiers_config
         self.patience = patience
         self.num_decoder_layers = num_decoder_layers
         self.d_ff = dim_feedforward
 
-        self.decoder = self.get_custom_decoder(nhead_list[-1])
-        self._reset_parameters()
-
-    def get_custom_decoder(self, nhead):
-        # Hàm này không có gì thay đổi
-        decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
+        decoder_layer = DecoderLayer(self.d_model, nhead_list[-1], dim_feedforward, dropout=dropout,
+                                     activation=activation)
         decoder_norm = LayerNorm(self.d_model)
-        if self.use_IA_decoder:
-            return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm,
-                               inner_classifiers_config=self.inner_classifiers_config, patient=self.patience)
+
+        if use_hierarchical_decoder:
+            print("Using Hierarchical Decoder (PBEEDecoder)")
+            assert inner_classifiers_config is not None, "Config [d_model, num_classes] is required for hierarchical decoder"
+            self.decoder = HierarchicalPBEEDecoder(decoder_layer, num_decoder_layers, norm=decoder_norm,
+                                                   patient=patience, inner_classifiers_config=inner_classifiers_config)
         else:
-            return TransformerDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm)
+            print("Using Standard Transformer Decoder")
+            # Bạn cần đảm bảo lớp TransformerDecoder của bạn tồn tại
+            self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, norm=decoder_norm)
+            # Thêm một lớp phân loại cuối cùng cho trường hợp standard
+            self.final_classifier = nn.Linear(self.d_model, inner_classifiers_config[1])
+
+        # self.decoder = self.get_custom_decoder(nhead_list[-1])
+        self._reset_parameters()
 
     def forward(self, src: list, tgt: Tensor, src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None,
@@ -199,14 +216,13 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
         # Gọi Decoder
         # Truyền các kwargs vào decoder một cách linh hoạt
-        output = self.decoder(tgt, full_memory,
-                              tgt_mask=kwargs.get('tgt_mask'),
-                              memory_mask=kwargs.get('memory_mask'),
-                              tgt_key_padding_mask=kwargs.get('tgt_key_padding_mask'),
-                              memory_key_padding_mask=kwargs.get('memory_key_padding_mask'))
+        output = self.decoder(tgt, full_memory,**kwargs)
+
+        if not isinstance(output, list):
+            # Nếu là decoder tiêu chuẩn, nó trả về tensor, ta cần phân loại và gói vào list
+            output = [self.final_classifier(output)]
 
         return output
-
 
 
 class SiFormer(nn.Module):
@@ -289,15 +305,15 @@ class SiFormer(nn.Module):
         return out
 
     @staticmethod
-    def get_encoding_table(d_model=108, seq_len=204):
-        torch.manual_seed(42)
-        tensor_shape = (seq_len, d_model)
-        frame_pos = torch.rand(tensor_shape)
-        for i in range(tensor_shape[0]):
-            for j in range(1, tensor_shape[1]):
-                frame_pos[i, j] = frame_pos[i, j - 1]
-        frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
-        return frame_pos
+    def get_encoding_table(d_model, seq_len=204):
+        pos = torch.arange(seq_len, dtype=torch.float).unsqueeze(1)
+        i = torch.arange(d_model, dtype=torch.float).unsqueeze(0)
+        angle_rates = 1 / torch.pow(10000, (2 * (i // 2)) / d_model)
+        angle_rads = pos * angle_rates
+        pe = torch.zeros(seq_len, d_model)
+        pe[:, 0::2] = torch.sin(angle_rads[:, 0::2])
+        pe[:, 1::2] = torch.cos(angle_rads[:, 1::2])
+        return pe.unsqueeze(1)
 
 
 class AbsolutePE(nn.Module):

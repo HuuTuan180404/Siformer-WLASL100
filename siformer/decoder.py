@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, List
 
 isChecked = False
 
@@ -109,6 +109,65 @@ class DecoderLayer(nn.TransformerDecoderLayer):
         tgt = self.norm3(tgt)
 
         return tgt
+
+
+# Thay thế lớp PBEEDecoder cũ của bạn bằng lớp này
+class HierarchicalPBEEDecoder(nn.Module):
+    """
+    Một phiên bản Hierarchical Decoder được triển khai đúng đắn,
+    hỗ trợ Deep Supervision và Early Exit cho batch data.
+    """
+    __constants__ = ['norm']
+
+    def __init__(self, decoder_layer, num_layers, norm=None, patient=1, inner_classifiers_config=None):
+        super().__init__()
+        self.layers = nn.ModuleList([decoder_layer for _ in range(num_layers)])
+        self.num_layers = num_layers
+        self.norm = norm
+        self.patience = patient
+
+        d_model, num_classes = inner_classifiers_config[0], inner_classifiers_config[1]
+        self.inner_classifiers = nn.ModuleList(
+            [nn.Linear(d_model, num_classes) for _ in range(num_layers)]
+        )
+
+    def forward(self, tgt: Tensor, memory: Tensor, **kwargs) -> List[Tensor]:
+        output = tgt
+        intermediate_predictions = []
+        patient_labels = None
+        patient_counter = 0
+
+        for i, layer in enumerate(self.layers):
+            # 1. Đi qua một lớp decoder
+            output = layer(output, memory, **kwargs)
+
+            # 2. Chuẩn hóa và lấy dự đoán từ lớp phân loại nội bộ
+            mod_output = self.norm(output) if self.norm is not None else output
+            # prediction_logits có shape [seq_len, batch_size, num_classes]
+            prediction_logits = self.inner_classifiers[i](mod_output)
+            intermediate_predictions.append(prediction_logits)
+
+            # 3. Logic thoát sớm (chỉ hoạt động khi ở chế độ eval)
+            # self.training là một thuộc tính sẵn có của nn.Module
+            if not self.training and self.patience > 0:
+                # Lấy nhãn dự đoán cho cả batch. squeeze(0) vì tgt có seq_len=1
+                # current_labels có shape [batch_size]
+                current_labels = torch.argmax(prediction_logits.squeeze(0), dim=-1)
+
+                if patient_labels is not None and torch.all(current_labels.eq(patient_labels)):
+                    patient_counter += 1
+                else:
+                    patient_counter = 1  # Reset về 1 vì lớp hiện tại đã là 1 lớp "patient"
+
+                patient_labels = current_labels
+
+                # Chú ý: patience=1 nghĩa là 2 lớp liên tiếp phải giống nhau
+                if patient_counter >= self.patience:
+                    # Nếu đủ "patient", thoát sớm và trả về các dự đoán đã có
+                    return intermediate_predictions
+
+        # Luôn trả về danh sách đầy đủ khi đang huấn luyện hoặc không thoát sớm
+        return intermediate_predictions
 
 #    The reference for the code is the PBEEDecoder class is the following
 #    Title: BERT Loses Patience: Fast and Robust Inference with Early Exit
