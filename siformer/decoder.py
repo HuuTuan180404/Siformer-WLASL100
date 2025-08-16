@@ -85,7 +85,7 @@ class DecoderLayer(nn.TransformerDecoderLayer):
     """
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-                 activation: Union[str, Callable[[Tensor], Tensor]] = F.relu):
+                 activation: Union[str, Callable[[Tensor], Tensor]] = F.relu, **kwargs):
         super(DecoderLayer, self).__init__(d_model, nhead, dim_feedforward, dropout, activation)
         # Change self.multihead_attn to use Pro-sparse attention
         print('Using custom DecoderLayer')
@@ -93,7 +93,7 @@ class DecoderLayer(nn.TransformerDecoderLayer):
     def forward(self, tgt: torch.Tensor, memory: torch.Tensor, tgt_mask: Optional[torch.Tensor] = None,
                 memory_mask: Optional[torch.Tensor] = None, tgt_key_padding_mask: Optional[torch.Tensor] = None,
                 memory_key_padding_mask: Optional[torch.Tensor] = None, tgt_is_causal: Optional[bool] = False,
-                memory_is_causal: Optional[bool] = False) -> torch.Tensor:
+                memory_is_causal: Optional[bool] = False, **kwargs) -> torch.Tensor:
         global isChecked
         if not isChecked:
             isChecked = True
