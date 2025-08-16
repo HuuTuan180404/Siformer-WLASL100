@@ -23,36 +23,6 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-def create_hand_graph():
-    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
-    # Định nghĩa các cạnh nối các khớp tay
-    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
-    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
-    return edge_index
-
-def create_body_graph():
-    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
-    body_edges = [...]
-    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
-    return edge_index
-
-
-class SpatialGCNEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
-        super().__init__()
-        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
-        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x, edge_index):
-        x = self.gcn1(x, edge_index)
-        x = F.relu(x)
-        x = self.dropout(x)
-        x = self.gcn2(x, edge_index)
-        return x
-
 
 class CommunicatingEncoderLayer(nn.Module):
     """
