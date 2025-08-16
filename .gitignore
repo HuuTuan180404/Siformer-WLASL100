@@ -83,6 +83,7 @@ coverage.xml
 
 # Bỏ qua dữ liệu
 *.xlsx
+*.csv
 *.mp4
 *.pth
 *.png
