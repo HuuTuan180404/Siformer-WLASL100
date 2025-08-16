@@ -82,7 +82,6 @@ coverage.xml
 *.log
 
 # Bỏ qua dữ liệu
-*.csv
 *.xlsx
 *.mp4
 *.pth
