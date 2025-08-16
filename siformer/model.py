@@ -23,47 +23,6 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-
-# Lớp này sẽ thay thế cho nn.TransformerDecoder
-class HierarchicalDecoder(nn.Module):
-    def __init__(self, decoder_layer, num_layers, norm=None, d_model=108, num_classes=100, patience=2):
-        super().__init__()
-        self.layers = nn.ModuleList([decoder_layer for _ in range(num_layers)])
-        self.num_layers = num_layers
-        self.norm = norm
-        self.patience = patience  # Số lớp liên tiếp phải đồng ý để thoát sớm
-
-        # Tạo một danh sách các lớp phân loại, một cho mỗi "lối ra"
-        self.classifiers = nn.ModuleList([
-            nn.Linear(d_model, num_classes) for _ in range(num_layers)
-        ])
-
-    def forward(self, tgt, memory, training=False, **kwargs):
-        output = tgt
-        intermediate_outputs = []
-
-        for i, layer in enumerate(self.layers):
-            # Đi qua một lớp decoder
-            output = layer(output, memory, **kwargs)
-
-            # Chuẩn hóa (nếu có) và đưa qua lớp phân loại tương ứng
-            normalized_output = self.norm(output) if self.norm is not None else output
-            prediction = self.classifiers[i](normalized_output)
-            intermediate_outputs.append(prediction)
-
-            # Logic thoát sớm khi không huấn luyện (khi suy luận)
-            if not training and i >= self.patience - 1:
-                # Lấy ra 'patience' dự đoán cuối cùng
-                recent_preds = [torch.argmax(p.squeeze(0), dim=-1) for p in intermediate_outputs[-self.patience:]]
-
-                # Kiểm tra xem tất cả có giống nhau không
-                if all(torch.equal(p, recent_preds[0]) for p in recent_preds):
-                    # Nếu tất cả giống nhau, trả về tất cả dự đoán cho đến hiện tại và thoát
-                    return intermediate_outputs
-
-        # Nếu đang huấn luyện hoặc không thể thoát sớm, trả về tất cả dự đoán
-        return intermediate_outputs
-
 class CommunicatingEncoderLayer(nn.Module):
     """
     Một lớp Encoder tùy chỉnh thực hiện 3 giai đoạn:
@@ -216,7 +175,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
         # Gọi Decoder
         # Truyền các kwargs vào decoder một cách linh hoạt
-        output = self.decoder(tgt, full_memory,**kwargs)
+        output = self.decoder(tgt, full_memory, **kwargs)
 
         if not isinstance(output, list):
             # Nếu là decoder tiêu chuẩn, nó trả về tensor, ta cần phân loại và gói vào list
