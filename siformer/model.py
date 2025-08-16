@@ -271,18 +271,10 @@ class SiFormer(nn.Module):
         r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
         body_in = new_body + self.body_embedding  # Shape remains the same
 
-        # print('#########################')
-
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
             [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
         ).transpose(0, 1)
-
-        '''
-        transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
-        ).transpose(0, 1)        
-        '''
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
         out = self.projection(transformer_output).squeeze()

@@ -78,12 +78,9 @@ coverage.xml
 # MacOS
 .DS_Store
 
-# Logs
-*.log
-
 # Bỏ qua dữ liệu
 *.xlsx
-# *.csv
+*.csv
 *.mp4
 *.pth
 *.png
