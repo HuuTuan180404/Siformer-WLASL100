@@ -256,6 +256,8 @@ class SiFormer(nn.Module):
         self.seq_len = seq_len
         self.device = device
 
+
+
         self.anatomical_gcn = AnatomicalGCN(input_dim=2, hidden_dims=[16, 32, 64])
 
         # === Sep-TCN Components ===
@@ -271,17 +273,21 @@ class SiFormer(nn.Module):
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=128))
         self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=64))
 
+        d_model_list = [128, 128, 64]
+        decoder_d_model = sum(d_model_list)  # Sẽ là 320
+
         # === Transformer ===
-        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
+        self.class_query = nn.Parameter(torch.rand(1, 1, decoder_d_model))
         self.transformer = FeatureIsolatedTransformer(
-            [128,128,64], [4, 4, 2, 8], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
+            d_model_list, [4, 4, 2, 8], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
             selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
-            inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
+            inner_classifiers_config=[decoder_d_model, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
         )
 
         print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
-        self.projection = nn.Linear(num_hid, num_classes)
+
+        self.projection = nn.Linear(decoder_d_model, num_classes)
 
         if device:
             self.hand_edges = self.anatomical_gcn.hand_edges.to(device)
