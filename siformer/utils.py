@@ -106,13 +106,12 @@ def evaluate_top_k(model, dataloader, device, k=5):
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
                 # Statistics
-                if int(label[0][0]) in torch.topk(output, k).indices.tolist():
+                if int(label[0]) in torch.topk(output, k).indices.tolist():
                     pred_correct += 1
 
                 pred_all += 1
 
     return pred_correct, pred_all, (pred_correct / pred_all)
-
 
 def get_sequence_list(num):
     if num == 0:

@@ -287,22 +287,56 @@ def train(args):
 
     top_result, top_result_name = 0, ""
 
+    test_accs_t=[]
+    test_accs_v=[]
+
     if eval_loader:
-        for i in range(checkpoint_index):
-            for checkpoint_id in ["t", "v"]:
-                # tested_model = VisionTransformer(dim=2, mlp_dim=108, num_classes=100, depth=12, heads=8)
-                tested_model = torch.load(
-                    "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth")
-                tested_model.train(False)
-                _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
-                _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
+        path_dir="out-checkpoints/" + args.experiment_name
+        files_model = os.listdir(path_dir)
 
-                if eval_acc > top_result:
-                    top_result = eval_acc
-                    top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
+        for file in files_model:
+            path_to_load = path_dir + '/' + file
+            tested_model = torch.load(path_to_load, weights_only=False)
 
-                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+            tested_model.train(False)
+            _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
+
+            if '_v_' in file == "v":
+                test_accs_v.append(eval_acc)
+            else:
+                test_accs_t.append(eval_acc)
+
+            _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
+
+            if eval_acc > top_result:
+                top_result = eval_acc
+                top_result_name = path_to_load
+            
+            print(file + "  ->  " + str(eval_acc))
+            logging.info(file + "  ->  " + str(eval_acc))
+
+
+        # for i in range(checkpoint_index):
+        #     for checkpoint_id in ["t", "v"]:
+        #         # tested_model = VisionTransformer(dim=2, mlp_dim=108, num_classes=100, depth=12, heads=8)
+        #         tested_model = torch.load(
+        #             "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth")
+        #         tested_model.train(False)
+        #         _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
+
+        #         if checkpoint_id == "v":
+        #             test_accs_v.append(eval_acc)
+        #         else:
+        #             test_accs_t.append(eval_acc)
+
+        #         _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
+
+        #         if eval_acc > top_result:
+        #             top_result = eval_acc
+        #             top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
+
+        #         print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+        #         logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
 
         print("\nThe top result was recorded at " + str(
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
@@ -317,6 +351,12 @@ def train(args):
 
         if val_loader:
             ax.plot(range(1, len(val_accs) + 1), val_accs, c="#E0A938", label="Validation accuracy")
+        
+        if len(test_accs_t)>0:
+            ax.plot(range(1, len(test_accs_t) + 1), test_accs_t, c="#3366FF", label="Test accuracy (t)")
+        
+        if len(test_accs_v)>0:
+            ax.plot(range(1, len(test_accs_v) + 1), test_accs_v, c="#33FF70", label="Test accuracy (v)")
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -335,6 +375,8 @@ def train(args):
         ax1.grid()
 
         fig1.savefig("out-img/" + args.experiment_name + "_lr.png")
+
+
 
     # PLOT 2: Training time
     if args.record_training_time:
