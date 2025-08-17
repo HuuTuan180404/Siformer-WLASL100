@@ -23,34 +23,32 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-def create_hand_graph():
-    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
-    # Định nghĩa các cạnh nối các khớp tay
-    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
-    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
-    return edge_index
 
-def create_body_graph():
-    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
-    body_edges = [...]
-    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
-    return edge_index
-
-
-class SpatialGCNEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
+class SepTCN(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, num_layers=3, dropout=0.1):
         super().__init__()
-        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
-        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
-        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, edge_index):
-        x = self.gcn1(x, edge_index)
-        x = F.relu(x)
-        x = self.dropout(x)
-        x = self.gcn2(x, edge_index)
+        layers = []
+        # Lớp đầu tiên chuyển từ in_channels sang out_channels
+        layers.append(nn.Conv1d(in_channels, out_channels, kernel_size, padding=kernel_size//2))
+        
+        # Các lớp tiếp theo đều có in_channels và out_channels bằng nhau (out_channels)
+        for _ in range(num_layers - 1):
+            layers.append(nn.Conv1d(out_channels, out_channels, kernel_size, padding=kernel_size//2))
+
+        self.layers = nn.ModuleList(layers)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(out_channels)
+
+    def forward(self, x):
+        # x: [batch_size, seq_len, features]
+        x = x.permute(0, 2, 1)  # [batch_size, features, seq_len]
+        for layer in self.layers:
+            x = layer(x)
+            x = torch.relu(x)
+            x = self.dropout(x)
+        x = x.permute(0, 2, 1)  # [batch_size, seq_len, out_channels]
+        x = self.norm(x)
         return x
 
 
@@ -208,29 +206,36 @@ class FeatureIsolatedTransformer(nn.Transformer):
         return output
 
 
-
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
 
-        # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
-        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
-        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
-        self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=24))
+        d_model_list = [128, 128, 64]
+        total_d_model = sum(d_model_list) # Sẽ bằng 320
 
-        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
+        # Sep-TCN cho mỗi luồng
+        self.l_hand_tcn = SepTCN(in_channels=42, out_channels=128, kernel_size=3)
+        self.r_hand_tcn = SepTCN(in_channels=42, out_channels=128, kernel_size=3)
+        self.body_tcn = SepTCN(in_channels=24, out_channels=64, kernel_size=3)
+
+        # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
+        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=128))
+        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=128))
+        self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=64))
+
+        self.class_query = nn.Parameter(torch.rand(1, 1, total_d_model))
         self.transformer = FeatureIsolatedTransformer(
-            [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
+            d_model_list, [8, 8, 4, 16], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
             selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
-            inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
+            inner_classifiers_config=[total_d_model, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
         )
         print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
-        self.projection = nn.Linear(num_hid, num_classes)
+        self.projection = nn.Linear(total_d_model, num_classes)
 
-    def forward(self, l_hand, r_hand, body, training):
+    def forward(self, l_hand, r_hand, new_body, training):
         batch_size = l_hand.size(0) # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
         '''
             # Giả sử l_hand có shape như này:
@@ -254,22 +259,27 @@ class SiFormer(nn.Module):
         '''
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
-        body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
+        l_hand_flat = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3)).type(torch.float32)
+        r_hand_flat = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3)).type(torch.float32)
+        body_flat = new_body.view(new_body.size(0), new_body.size(1), new_body.size(2) * new_body.size(3)).type(torch.float32)
+
+        # Áp dụng Sep-TCN
+        l_hand_tcn_out  = self.l_hand_tcn(l_hand_flat)  # [batch_size, seq_len, 128]
+        r_hand_tcn_out  = self.r_hand_tcn(r_hand_flat)
+        body_tcn_out  = self.body_tcn(body_flat)  # [batch_size, seq_len, 64]
 
         
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
+        l_hand_permuted  = l_hand_tcn_out.permute(1, 0, 2)
+        r_hand_permuted  = r_hand_tcn_out.permute(1, 0, 2)
+        body_permuted  = body_tcn_out.permute(1, 0, 2)
 
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
-        body_in = new_body + self.body_embedding  # Shape remains the same
+        l_hand_in = l_hand_permuted + self.l_hand_embedding  # Shape remains the same
+        r_hand_in = r_hand_permuted + self.r_hand_embedding  # Shape remains the same
+        body_in = body_permuted + self.body_embedding  # Shape remains the same
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(

@@ -299,16 +299,10 @@ def train(args):
         test_accs_t=[]
         test_accs_v=[]
 
-        print('test')
+        print('TEST')
         for i in range(checkpoint_index):            
             for checkpoint_id in ["t", "v"]:
                 path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
-
-                if (os.path.exists(path_to_load)):
-                    print('file pth tồn tại')
-                else:
-                    print('file pth không tồn tại')
-
 
                 tested_model = torch.load(path_to_load, weights_only=False)
 
