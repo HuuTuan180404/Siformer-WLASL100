@@ -82,7 +82,6 @@ coverage.xml
 *.xlsx
 *.csv
 *.mp4
-*.pth
 *.png
 *.pdf
 *.json
