@@ -61,14 +61,6 @@ class AnatomicalGCN(nn.Module):
 
         dims = [input_dim] + hidden_dims  # Ví dụ: [2, 16, 32, 64]
 
-        # self.hand_gcn_layers = nn.ModuleList([
-        #     GCNConv(dims[i], dims[i+1]) for i in range(len(dims)-1)
-        # ])
-
-        # self.body_gcn_layers = nn.ModuleList([
-        #     GCNConv(dims[i], dims[i+1]) for i in range(len(dims)-1)
-        # ])
-
 
     def _create_hand_topology(self):
         edges = [
@@ -178,10 +170,9 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
             if self.use_IA_encoder:
                 print("Encoder with input adaptive")
-                self.inner_classifiers_config[0] = f_d_model
                 encoder = PBEEncoder(
                     encoder_layer, self.num_encoder_layers, norm=encoder_norm,
-                    inner_classifiers_config=self.inner_classifiers_config,
+                    inner_classifiers_config=[f_d_model, self.inner_classifiers_config[1]],
                     projections_config=self.projections_config,
                     patience=self.patience
                 )
@@ -255,8 +246,6 @@ class SiFormer(nn.Module):
 
         self.seq_len = seq_len
         self.device = device
-
-
 
         self.anatomical_gcn = AnatomicalGCN(input_dim=2, hidden_dims=[16, 32, 64])
 
