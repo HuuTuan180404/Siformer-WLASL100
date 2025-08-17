@@ -3,18 +3,12 @@ import logging
 import pandas as pd
 
 BODY_IDENTIFIERS = [
-    "nose", # mũi #
-    "neck", # cái cổ #
-    "rightEye", # mắt phải #
-    "leftEye", # mắt trái  #
-    "rightEar", # tai phải #
-    "leftEar", # tai trái # 
-    "rightShoulder", # vai phải #
-    "leftShoulder", # vai trái #
-    "rightElbow", # cùi chỏ phải #
-    "leftElbow", # cùi chỏ trái #
-    "rightWrist", # cổ tay phải  #
-    "leftWrist" # cổ tay trái #
+    "neck", 
+    "rightShoulder","rightElbow","rightWrist", 
+    "leftShoulder","leftElbow", "leftWrist",
+    "nose", 
+    "rightEye", "rightEar",
+    "leftEye", "leftEar"
 ]
 
 

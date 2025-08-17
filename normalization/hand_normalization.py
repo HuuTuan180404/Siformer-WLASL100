@@ -4,26 +4,11 @@ import pandas as pd
 
 HAND_IDENTIFIERS = [
     "wrist",
-    "indexTip", ##
-    "indexDIP", ##
-    "indexPIP", ##
-    "indexMCP", ##
-    "middleTip", ##
-    "middleDIP", ##
-    "middlePIP", ##
-    "middleMCP", ##
-    "ringTip", ##
-    "ringDIP", ##
-    "ringPIP", ##
-    "ringMCP", ##
-    "littleTip", ##
-    "littleDIP", ##
-    "littlePIP", ##
-    "littleMCP",##
-    "thumbTip", ##
-    "thumbIP", ##
-    "thumbMP", ##
-    "thumbCMC" ##
+    "thumbCMC", "thumbMP", "thumbIP", "thumbTip",     
+    "indexMCP", "indexPIP", "indexDIP", "indexTip", 
+    "middleMCP", "middlePIP", "middleDIP", "middleTip", 
+    "ringMCP", "ringPIP", "ringDIP", "ringTip", 
+    "littleMCP","littlePIP", "littleDIP", "littleTip"
 ]
 
 

@@ -352,5 +352,15 @@ def train(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
+
+    # Đặt default cho args giống file .sh
+    parser.set_defaults(
+        experiment_name="WLASL100",
+        training_set_path="datasets/WLASL100_train_25fps.csv",
+        testing_set_path="datasets/WLASL100_val_25fps.csv",
+        validation_set="split-from-train",
+        num_classes=100
+    )
+
     args = parser.parse_args()
     train(args)

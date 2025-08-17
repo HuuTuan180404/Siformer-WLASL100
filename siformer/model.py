@@ -2,6 +2,7 @@ import copy
 import math
 import torch
 import torch.nn as nn
+from torch_geometric.nn import GCNConv
 from torch import Tensor
 import torch.nn.functional as F
 from torch.nn.modules.normalization import LayerNorm
@@ -18,6 +19,88 @@ import uuid
 
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
+
+class SepTCN(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, num_layers=2, dropout=0.1):
+        super().__init__()
+
+        self.layers = nn.ModuleList()
+        for i in range(num_layers):
+            input_channels = in_channels if i == 0 else out_channels
+            self.layers.append(
+                nn.Conv1d(input_channels, out_channels, kernel_size, padding=kernel_size//2)
+            )
+
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(out_channels)
+
+    def forward(self, x):
+        # x: [batch_size, seq_len, features]
+        x = x.permute(0, 2, 1)  # [batch_size, features, seq_len]
+        for layer in self.layers:
+            x = layer(x)
+            x = F.relu(x)
+            x = self.dropout(x)
+        x = x.permute(0, 2, 1)  # [batch_size, seq_len, out_channels]
+        x = self.norm(x)
+        return x
+
+
+class AnatomicalGCN(nn.Module):
+    def __init__(self, input_dim=2, hidden_dims=[16, 32, 64]):
+
+        super(AnatomicalGCN, self).__init__()
+
+        dims = [input_dim] + hidden_dims  # Ví dụ: [2, 16, 32, 64]
+        self.gcn_layers = nn.ModuleList([
+            GCNConv(dims[i], dims[i+1]) for i in range(len(dims)-1)
+        ])
+
+        self.hand_edges = self._create_hand_topology()
+        self.body_edges = self._create_body_topology()
+
+        dims = [input_dim] + hidden_dims  # Ví dụ: [2, 16, 32, 64]
+
+        # self.hand_gcn_layers = nn.ModuleList([
+        #     GCNConv(dims[i], dims[i+1]) for i in range(len(dims)-1)
+        # ])
+
+        # self.body_gcn_layers = nn.ModuleList([
+        #     GCNConv(dims[i], dims[i+1]) for i in range(len(dims)-1)
+        # ])
+
+
+    def _create_hand_topology(self):
+        edges = [
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            [0, 5], [5, 6], [6, 7], [7, 8],
+            [0, 9], [9, 10], [10, 11], [11, 12],
+            [0, 13], [13, 14], [14, 15], [15, 16],
+            [0, 17], [17, 18], [18, 19], [19, 20]
+        ]
+        return torch.tensor(edges).t().contiguous()
+
+    def _create_body_topology(self):
+        edges = [
+            [0, 1], [1, 2], [2, 3], 
+            [0, 4], [4, 5], [5, 6], 
+            [0, 7],
+            [7, 8], [8, 9],
+            [7, 10], [10, 11]
+        ]
+        return torch.tensor(edges).t().contiguous()
+
+    def forward_hand(self, x, edge_index):
+        for layer in self.gcn_layers:
+            x = layer(x, edge_index)
+            x = F.relu(x)
+        return x
+
+    def forward_body(self, x, edge_index):
+        for layer in self.gcn_layers:
+            x = layer(x, edge_index)
+            x = F.relu(x)
+        return x
 
 
 class FeatureIsolatedTransformer(nn.Transformer):
@@ -164,6 +247,157 @@ class FeatureIsolatedTransformer(nn.Transformer):
         return output
 
 
+class SiFormer(nn.Module):
+    def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
+                 seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
+        super(SiFormer, self).__init__()
+        print("Feature isolated transformer with Sep-TCN + GCN")
+
+        self.seq_len = seq_len
+        self.device = device
+
+        self.anatomical_gcn = AnatomicalGCN(input_dim=2, hidden_dims=[16, 32, 64])
+
+        # === Sep-TCN Components ===
+        # Sau GCN: 21 keypoints * 64 features = 1344 channels cho hand
+        self.l_hand_tcn = SepTCN(in_channels=21*64, out_channels=128, kernel_size=3, num_layers=3)
+        self.r_hand_tcn = SepTCN(in_channels=21*64, out_channels=128, kernel_size=3, num_layers=3)
+        # Sau GCN: 12 keypoints * 64 features = 768 channels cho body
+        self.body_tcn = SepTCN(in_channels=12*64, out_channels=64, kernel_size=3, num_layers=3)
+
+        # === Positional Embeddings ===
+        # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
+        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=128))
+        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=128))
+        self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=64))
+
+        # === Transformer ===
+        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
+        self.transformer = FeatureIsolatedTransformer(
+            [128,128,64], [4, 4, 2, 8], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
+            selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
+            inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
+            patience=patience, use_pyramid_encoder=False, distil=False
+        )
+
+        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
+        self.projection = nn.Linear(num_hid, num_classes)
+
+        if device:
+            self.hand_edges = self.anatomical_gcn.hand_edges.to(device)
+            self.body_edges = self.anatomical_gcn.body_edges.to(device)
+        else:
+            self.hand_edges = self.anatomical_gcn.hand_edges
+            self.body_edges = self.anatomical_gcn.body_edges
+
+    def process_with_gcn_tcn(self, keypoints, keypoint_type='hand'):
+        """
+        Process keypoints through GCN -> reshape -> TCN pipeline
+        
+        Args:
+            keypoints: [batch_size, seq_len, num_keypoints, 2]
+            keypoint_type: 'hand' or 'body'
+        Returns:
+            features: [seq_len, batch_size, feature_dim]
+        """
+        batch_size, seq_len, num_keypoints, coord_dim = keypoints.shape
+
+        keypoints = keypoints.to(dtype=torch.float32)
+        
+        # Reshape for GCN processing: [batch_size * seq_len, num_keypoints, 2]
+        keypoints_reshaped = keypoints.view(batch_size * seq_len, num_keypoints, coord_dim)
+        
+        # Apply GCN
+        if keypoint_type == 'hand':
+            # Repeat edges for batch processing
+            edge_index = self.hand_edges
+            batch_edges = []
+            for i in range(batch_size * seq_len):
+                batch_edges.append(edge_index + i * num_keypoints)
+            batch_edge_index = torch.cat(batch_edges, dim=1)
+            
+            # Flatten keypoints for GCN: [batch_size * seq_len * num_keypoints, 2]
+            x_flat = keypoints_reshaped.view(-1, coord_dim)
+            gcn_features = self.anatomical_gcn.forward_hand(x_flat, batch_edge_index)
+            
+        elif keypoint_type == 'body':
+            edge_index = self.body_edges
+            batch_edges = []
+            for i in range(batch_size * seq_len):
+                batch_edges.append(edge_index + i * num_keypoints)
+            batch_edge_index = torch.cat(batch_edges, dim=1)
+            
+            x_flat = keypoints_reshaped.view(-1, coord_dim)
+            gcn_features = self.anatomical_gcn.forward_body(x_flat, batch_edge_index)
+        
+        # Reshape GCN output: [batch_size, seq_len, num_keypoints * feature_dim]
+        gcn_output_dim = gcn_features.shape[-1]  # 64
+        gcn_features = gcn_features.view(batch_size, seq_len, num_keypoints * gcn_output_dim)
+        
+        # Apply Sep-TCN
+        if keypoint_type == 'hand':
+            tcn_features = self.l_hand_tcn(gcn_features)  # [batch_size, seq_len, 128]
+        elif keypoint_type == 'body':
+            tcn_features = self.body_tcn(gcn_features)   # [batch_size, seq_len, 64]
+        
+        # Convert to transformer format: [seq_len, batch_size, feature_dim]
+        tcn_features = tcn_features.permute(1, 0, 2).type(torch.float32)
+        
+        return tcn_features
+    
+    def forward(self, l_hand, r_hand, body, training):
+        """
+        Forward pass with GCN + Sep-TCN integration
+        
+        Args:
+            l_hand: [batch_size, seq_len, 21, 2] - Left hand keypoints
+            r_hand: [batch_size, seq_len, 21, 2] - Right hand keypoints  
+            body: [batch_size, seq_len, 12, 2] - Body keypoints
+            training: bool
+        """
+
+        batch_size = l_hand.size(0)
+
+        l_hand_features = self.process_with_gcn_tcn(l_hand, 'hand')  # [seq_len, batch_size, 128]
+        r_hand_features = self.process_with_gcn_tcn(r_hand, 'hand')  # [seq_len, batch_size, 128] 
+        body_features = self.process_with_gcn_tcn(body, 'body')      # [seq_len, batch_size, 64]
+
+        # feature_map = self.feature_extractor(new_inputs)
+        # transformer_in = feature_map + self.pos_embedding
+        l_hand_in = l_hand_features + self.l_hand_embedding  # Shape remains the same
+        r_hand_in = r_hand_features   + self.r_hand_embedding  # Shape remains the same
+        body_in = body_features + self.body_embedding  # Shape remains the same
+
+        # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
+        transformer_output = self.transformer(
+            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
+        ) # [batch_size, 1, num_hid]
+
+        # final_output = transformer_output[-1]  # [seq_len, batch_size, num_classes]
+        # out = final_output.transpose(0, 1).squeeze(1)  # [batch_size, num_classes]
+
+        # Permute to (batch_size, target_seq_len, d_model) -> (batch_size, 1, 320)
+        output = transformer_output.permute(1, 0, 2)
+        out = self.projection(output).squeeze(1)
+    
+        # === Final Classification ===
+        # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
+        # out = self.projection(transformer_output).squeeze() # [batch_size, num_classes]
+        return out
+
+    @staticmethod
+    def get_encoding_table(d_model=108, seq_len=204):
+        torch.manual_seed(42)
+        tensor_shape = (seq_len, d_model)
+        frame_pos = torch.rand(tensor_shape)
+        for i in range(tensor_shape[0]):
+            for j in range(1, tensor_shape[1]):
+                frame_pos[i, j] = frame_pos[i, j - 1]
+        frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
+        return frame_pos
+
+
+
 class AbsolutePE(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
         super(AbsolutePE, self).__init__()
@@ -209,65 +443,3 @@ class SpoTer(nn.Module):
         out = self.projection(transformer_out).squeeze()
         return out
 
-
-class SiFormer(nn.Module):
-    def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
-                 seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
-        super(SiFormer, self).__init__()
-        print("Feature isolated transformer")
-        # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
-        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
-        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
-        self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=24))
-
-        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
-        self.transformer = FeatureIsolatedTransformer(
-            [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
-            selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
-            inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
-            patience=patience, use_pyramid_encoder=False, distil=False
-        )
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
-        self.projection = nn.Linear(num_hid, num_classes)
-
-    def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0)
-        # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
-        # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
-        body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
-
-        # (batch_size, seq_len, feature_size) : (24, 204, 108)
-        # -> (seq_len, batch_size, feature_size): (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
-
-        # feature_map = self.feature_extractor(new_inputs)
-        # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
-        body_in = new_body + self.body_embedding  # Shape remains the same
-
-        # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
-        transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
-        ).transpose(0, 1)
-        # print("transformer_output.shape")
-        # print(transformer_output.shape)
-
-        # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze()
-        return out
-
-    @staticmethod
-    def get_encoding_table(d_model=108, seq_len=204):
-        torch.manual_seed(42)
-        tensor_shape = (seq_len, d_model)
-        frame_pos = torch.rand(tensor_shape)
-        for i in range(tensor_shape[0]):
-            for j in range(1, tensor_shape[1]):
-                frame_pos[i, j] = frame_pos[i, j - 1]
-        frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
-        return frame_pos
