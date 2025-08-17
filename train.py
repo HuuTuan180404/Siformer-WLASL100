@@ -315,29 +315,6 @@ def train(args):
             print(file + "  ->  " + str(eval_acc))
             logging.info(file + "  ->  " + str(eval_acc))
 
-
-        # for i in range(checkpoint_index):
-        #     for checkpoint_id in ["t", "v"]:
-        #         # tested_model = VisionTransformer(dim=2, mlp_dim=108, num_classes=100, depth=12, heads=8)
-        #         tested_model = torch.load(
-        #             "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth")
-        #         tested_model.train(False)
-        #         _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
-
-        #         if checkpoint_id == "v":
-        #             test_accs_v.append(eval_acc)
-        #         else:
-        #             test_accs_t.append(eval_acc)
-
-        #         _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
-
-        #         if eval_acc > top_result:
-        #             top_result = eval_acc
-        #             top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
-
-        #         print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-        #         logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-
         print("\nThe top result was recorded at " + str(
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
         logging.info("\nThe top result was recorded at " + str(
