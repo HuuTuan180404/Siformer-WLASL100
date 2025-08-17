@@ -21,7 +21,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
         optimizer.zero_grad()
         start_time = time.time()
 
-        outputs = model(l_hands, r_hands, bodies, training=True)
+        outputs = model(l_hands, r_hands, bodies)
 
         end_time = time.time()
         train_time_sec = end_time - start_time
@@ -65,7 +65,7 @@ def evaluate(model, dataloader, device, print_stats=False):
                 body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
                 label = labels[j]
 
-                output = model(l_hand, r_hand, body, training=False)
+                output = model(l_hand, r_hand, body)
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
                 # Statistics
@@ -103,7 +103,7 @@ def evaluate_top_k(model, dataloader, device, k=5):
                 body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
                 label = labels[j]
 
-                output = model(l_hand, r_hand, body, training=False)
+                output = model(l_hand, r_hand, body)
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
                 # Statistics

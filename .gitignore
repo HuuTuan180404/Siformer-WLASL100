@@ -78,9 +78,6 @@ coverage.xml
 # MacOS
 .DS_Store
 
-# Logs
-*.log
-
 # Bỏ qua dữ liệu
 *.csv
 *.xlsx
@@ -92,5 +89,4 @@ coverage.xml
 *.doc
 *.docx
 *.zip
-*.txt
 TUAN_TEST/

@@ -177,9 +177,9 @@ class FeatureIsolatedTransformer(nn.Transformer):
         # Truyền các kwargs vào decoder một cách linh hoạt
         output = self.decoder(tgt, full_memory, **kwargs)
 
-        if not isinstance(output, list):
-            # Nếu là decoder tiêu chuẩn, nó trả về tensor, ta cần phân loại và gói vào list
-            output = [self.final_classifier(output)]
+        # if not isinstance(output, list):
+        #     # Nếu là decoder tiêu chuẩn, nó trả về tensor, ta cần phân loại và gói vào list
+        #     output = [self.final_classifier(output)]
 
         return output
 
@@ -203,9 +203,9 @@ class SiFormer(nn.Module):
             patience=patience, use_pyramid_encoder=False, distil=False
         )
         print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
-        self.projection = nn.Linear(num_hid, num_classes)
+        # self.projection = nn.Linear(num_hid, num_classes)
 
-    def forward(self, l_hand, r_hand, body, training):
+    def forward(self, l_hand, r_hand, body):
         batch_size = l_hand.size(0) # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
         '''
             # Giả sử l_hand có shape như này:
@@ -250,17 +250,14 @@ class SiFormer(nn.Module):
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
-        ).transpose(0, 1)
+          src = [l_hand_in, r_hand_in, body_in], tgt=self.class_query.repeat(1, batch_size, 1)
+        )
 
-        '''
-        transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
-        ).transpose(0, 1)        
-        '''
+        final_output = transformer_output[-1]
+        out = final_output.transpose(0, 1).squeeze(1)
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze()
+        # out = self.projection(final_output).squeeze()
         return out
 
     @staticmethod

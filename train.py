@@ -209,110 +209,105 @@ def train(args):
 
     total_train_time = 0
     avg_train_time_sec_list = []
-    for epoch in range(args.epochs):
-        start_time = time.time()
-        train_loss, _, _, train_acc, avg_train_time = train_epoch(slr_model, train_loader, cel_criterion, optimizer,
-                                                                  device, scheduler=scheduler)
-        end_time = time.time()
-        train_time = end_time - start_time
 
-        losses.append(train_loss.item() / len(train_loader))
-        train_accs.append(train_acc)
 
-        if args.record_training_time:
-            avg_train_time_sec_list.append(avg_train_time)
-            total_train_time += train_time
-
-        if val_loader:
-            slr_model.train(False)
-            _, _, val_acc = evaluate(slr_model, val_loader, device)
-            slr_model.train(True)
-            val_accs.append(val_acc)
-
-        # Save checkpoints if they are best in the current subset
-        if args.save_checkpoints:
-            if train_acc > top_train_acc:
-                top_train_acc = train_acc
-                torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_t_" + str(
-                    checkpoint_index) + ".pth")
-
-            if val_acc > top_val_acc:
-                top_val_acc = val_acc
-                torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_v_" + str(
-                    checkpoint_index) + ".pth")
-
-                print(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
-                      + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
-                logging.info(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
-                             + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
-
-        if epoch % args.log_freq == 0:
-            print(
-                "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
-                    train_acc))
-            print(
-                f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
-            )
-            logging.info(
-                "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
-                    train_acc))
-            logging.info(
-                f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
-            )
-
-            if val_loader:
-                print("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
-                logging.info("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
-
-                print("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
-                logging.info("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
-
-            print("")
-            logging.info("")
-
-        # Reset the top accuracies on static subsets
-        if epoch % 10 == 0:
-            top_train_acc, top_val_acc = 0, 0
-            checkpoint_index += 1
-
-        lr_progress.append(optimizer.param_groups[0]["lr"])
-
-    if args.record_training_time:
-        print(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
-        print(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
-
-        logging.info(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
-        logging.info(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
+    # for epoch in range(args.epochs):
+    #     # =================== GIAI ĐOẠN HUẤN LUYỆN ===================
+    #     slr_model.train()
+    #     start_time = time.time()
+    #     train_loss, _, _, train_acc, avg_train_time = train_epoch(slr_model, train_loader, cel_criterion, optimizer,
+    #                                                               device, scheduler=scheduler)
+    #     end_time = time.time()
+    #     train_time = end_time - start_time
+    #
+    #     losses.append(train_loss.item() / len(train_loader))
+    #     train_accs.append(train_acc)
+    #
+    #     if args.record_training_time:
+    #         avg_train_time_sec_list.append(avg_train_time)
+    #         total_train_time += train_time
+    #
+    #
+    #     # =================== GIAI ĐOẠN ĐÁNH GIÁ (VALIDATION) ===================
+    #     if val_loader:
+    #         slr_model.eval()
+    #         _, _, val_acc = evaluate(slr_model, val_loader, device)
+    #         val_accs.append(val_acc)
+    #
+    #     # =================== LƯU CHECKPOINT VÀ LOGGING ===================
+    #     if args.save_checkpoints:
+    #         if train_acc > top_train_acc:
+    #             top_train_acc = train_acc
+    #             torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_t_" + str(
+    #                 checkpoint_index) + ".pth")
+    #
+    #         if val_acc > top_val_acc:
+    #             top_val_acc = val_acc
+    #             torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_v_" + str(
+    #                 checkpoint_index) + ".pth")
+    #
+    #             print(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
+    #                   + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
+    #             logging.info(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
+    #                          + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
+    #
+    #     if epoch % args.log_freq == 0:
+    #         print(
+    #             "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
+    #                 train_acc))
+    #         print(
+    #             f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
+    #         )
+    #         logging.info(
+    #             "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
+    #                 train_acc))
+    #         logging.info(
+    #             f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
+    #         )
+    #
+    #         if val_loader:
+    #             print("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
+    #             logging.info("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
+    #
+    #             print("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
+    #             logging.info("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
+    #
+    #         print("")
+    #         logging.info("")
+    #
+    #     # Reset the top accuracies on static subsets
+    #     if epoch % 10 == 0:
+    #         top_train_acc, top_val_acc = 0, 0
+    #         checkpoint_index += 1
+    #
+    #     lr_progress.append(optimizer.param_groups[0]["lr"])
+    #
+    # if args.record_training_time:
+    #     print(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
+    #     print(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
+    #
+    #     logging.info(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
+    #     logging.info(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
 
     # MARK: TESTING
     print("\nTesting checkpointed models starting...\n")
     logging.info("\nTesting checkpointed models starting...\n")
 
-    if (os.path.exists(args.testing_set_path)):
-        # print("Testing using " + args.testing_set_path + "...\n")
-        print('file test tồn tại')
-
     top_result, top_result_name = 0, ""
-    checkpoint_index=10
+    checkpoint_index=11
 
     if eval_loader:
         test_accs_t=[]
         test_accs_v=[]
 
-        print('test')
         for i in range(checkpoint_index):            
             for checkpoint_id in ["t", "v"]:
                 path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
 
-                if (os.path.exists(path_to_load)):
-                    print('file pth tồn tại')
-                else:
-                    print('file pth không tồn tại')
-
-
                 tested_model = torch.load(path_to_load, weights_only=False)
 
-                tested_model.train(False)
+                tested_model.eval()
+
                 _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
 
                 if checkpoint_id == "v":
