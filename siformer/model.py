@@ -8,10 +8,10 @@ import torch.nn.functional as F
 from torch.nn.modules.normalization import LayerNorm
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, List
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention
 from siformer.decoder import DecoderLayer, PBEEDecoder
-from siformer.encoder import Encoder, EncoderLayer, ConvLayer, EncoderStack, PBEEncoder
+from siformer.encoder import  EncoderLayer, PBEEncoder
 from siformer.utils import get_sequence_list
 
 import uuid
@@ -23,36 +23,137 @@ from torch_geometric.utils import add_self_loops
 def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
-def create_hand_graph():
-    # Giả sử 21 khớp tay được đánh số từ 0 đến 20
-    # Định nghĩa các cạnh nối các khớp tay
-    hand_edges = [[0, 1], [1, 2], ...] # Thêm tất cả các cạnh xương của bàn tay
-    edge_index = torch.tensor(hand_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=21)
-    return edge_index
 
-def create_body_graph():
-    # Giả sử 12 khớp thân được đánh số từ 0 đến 11
-    body_edges = [...]
-    edge_index = torch.tensor(body_edges, dtype=torch.long).t().contiguous()
-    edge_index, _ = add_self_loops(edge_index, num_nodes=12)
-    return edge_index
-
-
-class SpatialGCNEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout):
+class PerStreamPBE(nn.Module):
+    """ PBEEncoder cho từng stream riêng. """
+    def __init__(self, d_model: int, nhead: int, num_layers: int,
+                 dim_feedforward: int, dropout: float,
+                 activation: nn.Module,
+                 attn_layer_factory,
+                 patience: int = 1,
+                 inner_classifiers_config: List[int] = None,
+                 projections_config: List[int] = None):
         super().__init__()
-        self.gcn1 = pyg_nn.GCNConv(in_channels, hidden_channels)
-        self.gcn2 = pyg_nn.GCNConv(hidden_channels, out_channels)
-        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, edge_index):
-        x = self.gcn1(x, edge_index)
-        x = F.relu(x)
-        x = self.dropout(x)
-        x = self.gcn2(x, edge_index)
-        return x
+        # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
+        enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
+        encoder_layer = EncoderLayer(
+            attention=enc_attn,
+            d_model=d_model,
+            d_ff=dim_feedforward,
+            dropout=dropout,
+            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
+        )
+        self.encoder = PBEEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=num_layers,
+            norm=nn.LayerNorm(d_model),
+            patience=patience,
+            inner_classifiers_config=inner_classifiers_config,
+            projections_config=projections_config
+        )
 
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None,
+                key_padding_mask: Optional[Tensor] = None,
+                training: bool = True) -> Tensor:
+        # x: [L, B, D_stream]
+        return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
+
+
+class PerStreamPBE(nn.Module):
+    """ PBEEncoder cho từng stream riêng. """
+    def __init__(self, d_model: int, nhead: int, num_layers: int,
+                 dim_feedforward: int, dropout: float,
+                 activation: nn.Module,
+                 attn_layer_factory,
+                 patience: int = 1,
+                 inner_classifiers_config: List[int] = None,
+                 projections_config: List[int] = None):
+        super().__init__()
+
+        # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
+        enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
+        encoder_layer = EncoderLayer(
+            attention=enc_attn,
+            d_model=d_model,
+            d_ff=dim_feedforward,
+            dropout=dropout,
+            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
+        )
+        self.encoder = PBEEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=num_layers,
+            norm=nn.LayerNorm(d_model),
+            patience=patience,
+            inner_classifiers_config=inner_classifiers_config,
+            projections_config=projections_config
+        )
+
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None,
+                key_padding_mask: Optional[Tensor] = None,
+                training: bool = True) -> Tensor:
+        # x: [L, B, D_stream]
+        return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
+
+
+class CombinedEncoder(nn.Module):
+    """
+    1) PBEEncoder cho LH/RH/Body (song song, độc lập)
+    2) Một stack CommunicatingEncoderLayer để cross-attend & fuse
+    """
+    def __init__(self, d_model_list: List[int], nhead_list: List[int],
+                 num_pbe_layers: int, num_comm_layers: int,
+                 dim_feedforward: int, dropout: float,
+                 activation: nn.Module,
+                 attn_layer_factory,
+                 patience: int = 1,
+                 inner_classifiers_config: List[int] = None,
+                 projections_config: List[int] = None):
+        super().__init__()
+        # 1) PBE per-stream
+        self.pbe_lh = PerStreamPBE(d_model_list[0], nhead_list[0], num_pbe_layers,
+                                   dim_feedforward, dropout, activation, attn_layer_factory,
+                                   patience, inner_classifiers_config, projections_config)
+        self.pbe_rh = PerStreamPBE(d_model_list[1], nhead_list[1], num_pbe_layers,
+                                   dim_feedforward, dropout, activation, attn_layer_factory,
+                                   patience, inner_classifiers_config, projections_config)
+        self.pbe_body = PerStreamPBE(d_model_list[2], nhead_list[2], num_pbe_layers,
+                                     dim_feedforward, dropout, activation, attn_layer_factory,
+                                     patience, inner_classifiers_config, projections_config)
+
+        # 2) Communicating stack
+        self.comm_layers = nn.ModuleList([
+            CommunicatingEncoderLayer(d_model_list, nhead_list, dim_feedforward, dropout, activation, attn_layer_factory)
+            for _ in range(num_comm_layers)
+        ])
+
+        # Norm cuối mỗi stream
+        self.norm_lh = LayerNorm(d_model_list[0])
+        self.norm_rh = LayerNorm(d_model_list[1])
+        self.norm_body = LayerNorm(d_model_list[2])
+
+    def forward(self, src_list: List[Tensor],
+                src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
+                training: bool = True) -> List[Tensor]:
+        l_hand_x, r_hand_x, body_x = src_list  # [L,B,D_i]
+
+        # 1) PBE per-stream
+        l_hand_x = self.pbe_lh(l_hand_x, mask=src_mask, key_padding_mask=src_key_padding_mask, training=training)
+        r_hand_x = self.pbe_rh(r_hand_x, mask=src_mask, key_padding_mask=src_key_padding_mask, training=training)
+        body_x   = self.pbe_body(body_x, mask=src_mask, key_padding_mask=src_key_padding_mask, training=training)
+
+        # 2) Communicating stack
+        feats = [l_hand_x, r_hand_x, body_x]
+        for layer in self.comm_layers:
+            feats = layer(feats, src_mask=src_mask, src_key_padding_mask=src_key_padding_mask)
+
+        # Norm cuối
+        feats[0] = self.norm_lh(feats[0])
+        feats[1] = self.norm_rh(feats[1])
+        feats[2] = self.norm_body(feats[2])
+        return feats  # [LH, RH, Body] đã fused
+    
 
 class CommunicatingEncoderLayer(nn.Module):
     """
@@ -129,10 +230,11 @@ class CommunicatingEncoderLayer(nn.Module):
 
 class FeatureIsolatedTransformer(nn.Transformer):
     def __init__(self, d_model_list: list, nhead_list: list, num_encoder_layers: int, num_decoder_layers: int,
+                 num_pbe_layers: int, num_comm_layers: int,
                  dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
-                 IA_decoder: bool = False, inner_classifiers_config: list = None, patience: int = 1,
+                 IA_decoder: bool = False, inner_classifiers_config: list = None, patience: int = 1,projections_config: list = None,
                  **kwargs):  # Dùng **kwargs cho các tham số không dùng đến
 
         super(FeatureIsolatedTransformer, self).__init__(sum(d_model_list), nhead_list[-1], num_encoder_layers,
@@ -140,6 +242,11 @@ class FeatureIsolatedTransformer(nn.Transformer):
         del self.encoder
 
         self.d_model = sum(d_model_list)
+        self.d_ff= dim_feedforward
+        self.num_decoder_layers = num_decoder_layers
+        self.use_IA_decoder = IA_decoder
+        self.inner_classifiers_config = inner_classifiers_config
+        self.patience = patience
 
         # --- Khởi tạo Encoder ---
         # Hàm factory để tạo các lớp AttentionLayer một cách nhất quán
@@ -147,28 +254,29 @@ class FeatureIsolatedTransformer(nn.Transformer):
             Attn = ProbAttention if selected_attn == 'prob' else FullAttention
             return AttentionLayer(Attn(output_attention=output_attention), d_model, n_heads, mix=False)
 
-        # Tạo một danh sách các lớp Encoder giao tiếp. Đây là bộ Encoder DUY NHẤT.
-        self.encoder_layers = nn.ModuleList([
-            CommunicatingEncoderLayer(d_model_list, nhead_list, dim_feedforward, dropout, activation,
-                                      attn_layer_factory)
-            for _ in range(num_encoder_layers)
-        ])
+        # Encoder kết hợp
+        self.encoder = CombinedEncoder(
+            d_model_list=d_model_list,
+            nhead_list=nhead_list,
+            num_pbe_layers=num_pbe_layers,
+            num_comm_layers=num_comm_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation=activation,
+            attn_layer_factory=attn_layer_factory,
+            patience=patience,
+            inner_classifiers_config=inner_classifiers_config,
+            projections_config=projections_config
+        )
 
         # Lớp Norm cuối cùng cho mỗi luồng, sẽ được áp dụng sau khi qua tất cả các lớp
-        self.norm_lh = LayerNorm(d_model_list[0])
-        self.norm_rh = LayerNorm(d_model_list[1])
-        self.norm_body = LayerNorm(d_model_list[2])
+        # self.norm_lh = LayerNorm(d_model_list[0])
+        # self.norm_rh = LayerNorm(d_model_list[1])
+        # self.norm_body = LayerNorm(d_model_list[2])
 
         # --- Khởi tạo Decoder ---
-        # (Giả định get_custom_decoder không cần thay đổi)
-        self.use_IA_decoder = IA_decoder
-        self.inner_classifiers_config = inner_classifiers_config
-        self.patience = patience
-        self.num_decoder_layers = num_decoder_layers
-        self.d_ff = dim_feedforward
-
         self.decoder = self.get_custom_decoder(nhead_list[-1])
-        self._reset_parameters()
+        # self._reset_parameters()
 
     def get_custom_decoder(self, nhead):
         # Hàm này không có gì thay đổi
@@ -178,24 +286,20 @@ class FeatureIsolatedTransformer(nn.Transformer):
             return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm,
                                inner_classifiers_config=self.inner_classifiers_config, patient=self.patience)
         else:
+            print("TransformerDecoder")
             return TransformerDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm)
 
     def forward(self, src: list, tgt: Tensor, src_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None,
-                # Các tham số còn lại được gom vào kwargs
+                src_key_padding_mask: Optional[Tensor] = None, training:bool=True, 
                 **kwargs) -> Tensor:
+        
+        lh, rh, body = self.encoder(src, src_mask=src_mask,
+                                    src_key_padding_mask=src_key_padding_mask,
+                                    training=kwargs.get('training', True))
 
-        # Vòng lặp Encoder, truyền trực tiếp list 'src'
-        for layer in self.encoder_layers:
-            src = layer(src, src_mask=src_mask, src_key_padding_mask=src_key_padding_mask)
-
-        # Áp dụng lớp chuẩn hóa cuối cùng cho mỗi luồng
-        l_hand_memory = self.norm_lh(src[0])
-        r_hand_memory = self.norm_rh(src[1])
-        body_memory = self.norm_body(src[2])
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
-        full_memory = torch.cat((l_hand_memory, r_hand_memory, body_memory), -1)
+        full_memory = torch.cat((lh, rh, body), dim=-1) # [L, B, D_sum]
 
         # Gọi Decoder
         # Truyền các kwargs vào decoder một cách linh hoạt
@@ -208,9 +312,10 @@ class FeatureIsolatedTransformer(nn.Transformer):
         return output
 
 
-
 class SiFormer(nn.Module):
-    def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
+    def __init__(self, num_classes, num_hid=108, attn_type='prob',
+                  num_pbe_layers=2, num_comm_layers=1, num_enc_layers=3, 
+                  num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
@@ -218,20 +323,24 @@ class SiFormer(nn.Module):
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
-        self.body_embedding = nn.Parameter(self.get_encoding_table(d_model=24))
+        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model=24))
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
+
         self.transformer = FeatureIsolatedTransformer(
             [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
             selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
+            num_pbe_layers=num_pbe_layers, num_comm_layers=num_comm_layers,
             inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
         )
+
         print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
+
         self.projection = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0) # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
+         # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
         '''
             # Giả sử l_hand có shape như này:
             l_hand = torch.randn(2, 204, 21, 2)
@@ -254,10 +363,11 @@ class SiFormer(nn.Module):
         '''
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3))
+        batch_size = l_hand.size(0)
+
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3)) # [B, L, 21, 2] -> reshape thành [B, L, 42]
         new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
         body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
-
         
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
@@ -268,8 +378,8 @@ class SiFormer(nn.Module):
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
         l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding  # Shape remains the same
-        body_in = new_body + self.body_embedding  # Shape remains the same
+        r_hand_in = new_r_hand + self.r_hand_embedding
+        body_in = new_body + self.body_embedding
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
@@ -277,7 +387,7 @@ class SiFormer(nn.Module):
         ).transpose(0, 1)
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze()
+        out = self.projection(transformer_output).squeeze(1)
         return out
 
     @staticmethod

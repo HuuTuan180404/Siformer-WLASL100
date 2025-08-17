@@ -14,6 +14,7 @@ class PBEEDecoder(nn.TransformerDecoder):
 
     def __init__(self, decoder_layer, num_layers, norm=None, patient=1, inner_classifiers_config=None):
         super(PBEEDecoder, self).__init__(decoder_layer, num_layers, norm)
+        print('Using custom PBEEDecoder')
         self.patience = patient
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
@@ -51,8 +52,10 @@ class PBEEDecoder(nn.TransformerDecoder):
                 mod_output = output
                 if self.norm is not None:
                     mod_output = self.norm(mod_output)
+
                 classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)
                 classifier_out = classifier_out.expand(1, -1, -1)
+
                 # labels = classifier_out.detach().argmax(dim=1)
                 # _, labels = torch.max(F.softmax(classifier_out, dim=1), 1)
                 label = int(torch.argmax(torch.nn.functional.softmax(classifier_out, dim=2)))
