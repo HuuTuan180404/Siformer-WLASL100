@@ -24,6 +24,59 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
+class TemporalBlock(nn.Module):
+    """Một khối cơ bản cho TCN với dilated convolution."""
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int, padding: int, dropout: float = 0.2):
+        super().__init__()
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size,
+                               stride=1, padding=padding, dilation=dilation)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout)
+        
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size,
+                               stride=1, padding=padding, dilation=dilation)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout)
+        
+        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
+        self.relu = nn.ReLU()
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B, C, L] (batch, channels, seq_len)
+        out = self.conv1(x)
+        out = self.relu1(out)
+        out = self.dropout1(out)
+        out = self.conv2(out)
+        out = self.relu2(out)
+        out = self.dropout2(out)
+        
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)
+
+
+class TCN(nn.Module):
+    """Temporal Convolutional Network cho một stream.
+    Áp dụng trên từng luồng (LH, RH, Body) để capture temporal dependencies.
+    Input: [L, B, D] -> permute to [B, D, L] cho Conv1d.
+    Output: [L, B, D] để giữ nguyên shape cho transformer.
+    """
+    def __init__(self, in_channels: int, num_layers: int = 4, kernel_size: int = 3, dropout: float = 0.2):
+        super().__init__()
+        layers = []
+        for i in range(num_layers):
+            dilation = 2 ** i  # Increasing dilation for receptive field
+            padding = (kernel_size - 1) * dilation // 2  # Causal padding, nhưng vì bidirectional, dùng symmetric
+            layers.append(TemporalBlock(in_channels, in_channels, kernel_size, dilation, padding, dropout))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [L, B, D]
+        x = x.permute(1, 2, 0)  # [B, D, L] for Conv1d
+        out = self.network(x)
+        out = out.permute(2, 0, 1)  # Back to [L, B, D]
+        return out
+
+
 class PerStreamPBE(nn.Module):
     """ PBEEncoder cho từng stream riêng. """
     def __init__(self, d_model: int, nhead: int, num_layers: int,
@@ -174,9 +227,9 @@ class CommunicatingEncoderLayer(nn.Module):
         self.norm2_body = nn.LayerNorm(d_model_list[2])
 
         # Giai đoạn 3: Feed-Forward Networks
-        self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), activation, nn.Linear(d_ff, d_model_list[0]))
-        self.ffn_rh = nn.Sequential(nn.Linear(d_model_list[1], d_ff), activation, nn.Linear(d_ff, d_model_list[1]))
-        self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), activation, nn.Linear(d_ff, d_model_list[2]))
+        self.ffn_lh   = nn.Sequential(nn.Linear(d_model_list[0], d_ff), activation, nn.Dropout(dropout), nn.Linear(d_ff, d_model_list[0]), nn.Dropout(dropout))
+        self.ffn_rh   = nn.Sequential(nn.Linear(d_model_list[1], d_ff), activation, nn.Dropout(dropout), nn.Linear(d_ff, d_model_list[1]), nn.Dropout(dropout))
+        self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), activation, nn.Dropout(dropout), nn.Linear(d_ff, d_model_list[2]), nn.Dropout(dropout))
 
         self.norm3_lh = LayerNorm(d_model_list[0])
         self.norm3_rh = LayerNorm(d_model_list[1])
@@ -321,12 +374,17 @@ class SiFormer(nn.Module):
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
-        print("Feature isolated transformer")
+        print("Feature isolated transformer with TCN")
 
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model=24))
+
+        # Thêm TCN cho từng stream
+        self.tcn_lh = TCN(in_channels=42)
+        self.tcn_rh = TCN(in_channels=42)
+        self.tcn_body = TCN(in_channels=24)
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
@@ -378,11 +436,15 @@ class SiFormer(nn.Module):
         new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
         new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
 
+        l_hand_tcn = self.tcn_lh(new_l_hand)  # [L, B, 42]
+        r_hand_tcn = self.tcn_rh(new_r_hand)  # [L, B, 42]
+        body_tcn = self.tcn_body(new_body)    # [L, B, 24]
+
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding
-        body_in = new_body + self.body_embedding
+        l_hand_in = l_hand_tcn + self.l_hand_embedding  # Shape remains the same
+        r_hand_in = r_hand_tcn + self.r_hand_embedding
+        body_in = body_tcn + self.body_embedding
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
