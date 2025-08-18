@@ -89,3 +89,4 @@ coverage.xml
 *.docx
 *.zip
 TUAN_TEST/
+*.pyc
