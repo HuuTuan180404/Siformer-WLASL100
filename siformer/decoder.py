@@ -51,11 +51,11 @@ class PBEEDecoder(nn.TransformerDecoder):
                 mod_output = output
                 if self.norm is not None:
                     mod_output = self.norm(mod_output)
-                classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)
-                classifier_out = classifier_out.expand(1, -1, -1)
+                classifier_out = self.inner_classifiers[i](mod_output)#.squeeze().unsqueeze(0)
+                # classifier_out = classifier_out.expand(1, -1, -1)
                 # labels = classifier_out.detach().argmax(dim=1)
                 # _, labels = torch.max(F.softmax(classifier_out, dim=1), 1)
-                label = int(torch.argmax(torch.nn.functional.softmax(classifier_out, dim=2)))
+                label = int(torch.argmax(torch.nn.functional.softmax(classifier_out, dim=-1), dim=-1))
 
                 if patient_result is not None:
                     # patient_out = patient_result.detach().argmax(dim=1)

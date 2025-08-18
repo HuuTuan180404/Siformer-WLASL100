@@ -95,10 +95,9 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
             if self.use_IA_encoder:
                 print("Encoder with input adaptive")
-                self.inner_classifiers_config[0] = f_d_model
                 encoder = PBEEncoder(
                     encoder_layer, self.num_encoder_layers, norm=encoder_norm,
-                    inner_classifiers_config=self.inner_classifiers_config,
+                    inner_classifiers_config=[f_d_model, self.inner_classifiers_config[1]],
                     projections_config=self.projections_config,
                     patience=self.patience
                 )
@@ -164,52 +163,6 @@ class FeatureIsolatedTransformer(nn.Transformer):
         return output
 
 
-class AbsolutePE(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
-        super(AbsolutePE, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        pe = torch.zeros(max_len, d_model)  # positional encoding
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        pe[:, 0::2] = torch.sin((position * div_term)*(d_model/max_len))
-        pe[:, 1::2] = torch.cos((position * div_term)*(d_model/max_len))
-        pe = scale_factor * pe.unsqueeze(0)
-        # reshape the matrix shape to met the input shape
-        # pe = pe.squeeze(0).unsqueeze(1)
-        self.register_buffer('pe', pe)  # this stores the variable in the state_dict (used for non-trainable variables)
-
-    def forward(self, x):
-        x = x + self.pe
-        return self.dropout(x)
-
-
-class SpoTer(nn.Module):
-    def __init__(self, num_classes, num_hid=108, num_enc_layers=3, num_dec_layers=2, seq_len=204):
-        super(SpoTer, self).__init__()
-        print("Normal transformer")
-        self.embedding = AbsolutePE(d_model=num_hid,max_len=seq_len)
-        self.class_query = nn.Parameter(torch.rand(1, num_hid))
-        self.transformer = nn.Transformer(num_hid, 9, num_enc_layers, num_dec_layers)
-        custom_decoder_layer = DecoderLayer(self.transformer.d_model, self.transformer.nhead, 2048, 0.1, "relu")
-        self.transformer.decoder.layers = _get_clones(custom_decoder_layer, self.transformer.decoder.num_layers)
-        self.projection = nn.Linear(num_hid, num_classes)
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}")
-
-    def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0)
-
-        inputs = torch.cat((l_hand, r_hand, body), -2)
-        inputs = inputs.view(inputs.size(0), inputs.size(1), inputs.size(2) * inputs.size(3))
-
-        new_inputs = self.embedding(inputs)
-        new_inputs = new_inputs.permute(1, 0, 2).type(dtype=torch.float32)
-
-        transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
-        out = self.projection(transformer_out).squeeze()
-        return out
-
-
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob', num_enc_layers=3, num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
@@ -271,3 +224,51 @@ class SiFormer(nn.Module):
                 frame_pos[i, j] = frame_pos[i, j - 1]
         frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
         return frame_pos
+
+
+class AbsolutePE(nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=1024, scale_factor=1.0):
+        super(AbsolutePE, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)  # positional encoding
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin((position * div_term)*(d_model/max_len))
+        pe[:, 1::2] = torch.cos((position * div_term)*(d_model/max_len))
+        pe = scale_factor * pe.unsqueeze(0)
+        # reshape the matrix shape to met the input shape
+        # pe = pe.squeeze(0).unsqueeze(1)
+        self.register_buffer('pe', pe)  # this stores the variable in the state_dict (used for non-trainable variables)
+
+    def forward(self, x):
+        x = x + self.pe
+        return self.dropout(x)
+
+
+class SpoTer(nn.Module):
+    def __init__(self, num_classes, num_hid=108, num_enc_layers=3, num_dec_layers=2, seq_len=204):
+        super(SpoTer, self).__init__()
+        print("Normal transformer")
+        self.embedding = AbsolutePE(d_model=num_hid,max_len=seq_len)
+        self.class_query = nn.Parameter(torch.rand(1, num_hid))
+        self.transformer = nn.Transformer(num_hid, 9, num_enc_layers, num_dec_layers)
+        custom_decoder_layer = DecoderLayer(self.transformer.d_model, self.transformer.nhead, 2048, 0.1, "relu")
+        self.transformer.decoder.layers = _get_clones(custom_decoder_layer, self.transformer.decoder.num_layers)
+        self.projection = nn.Linear(num_hid, num_classes)
+        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}")
+
+    def forward(self, l_hand, r_hand, body, training):
+        batch_size = l_hand.size(0)
+
+        inputs = torch.cat((l_hand, r_hand, body), -2)
+        inputs = inputs.view(inputs.size(0), inputs.size(1), inputs.size(2) * inputs.size(3))
+
+        new_inputs = self.embedding(inputs)
+        new_inputs = new_inputs.permute(1, 0, 2).type(dtype=torch.float32)
+
+        transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
+        out = self.projection(transformer_out).squeeze()
+        return out
+
+
