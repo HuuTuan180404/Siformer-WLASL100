@@ -60,42 +60,6 @@ class PerStreamPBE(nn.Module):
         return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
 
 
-class PerStreamPBE(nn.Module):
-    """ PBEEncoder cho từng stream riêng. """
-    def __init__(self, d_model: int, nhead: int, num_layers: int,
-                 dim_feedforward: int, dropout: float,
-                 activation: nn.Module,
-                 attn_layer_factory,
-                 patience: int = 1,
-                 inner_classifiers_config: List[int] = None,
-                 projections_config: List[int] = None):
-        super().__init__()
-
-        # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
-        enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
-        encoder_layer = EncoderLayer(
-            attention=enc_attn,
-            d_model=d_model,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
-        )
-        self.encoder = PBEEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=num_layers,
-            norm=nn.LayerNorm(d_model),
-            patience=patience,
-            inner_classifiers_config=inner_classifiers_config,
-            projections_config=projections_config
-        )
-
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None,
-                key_padding_mask: Optional[Tensor] = None,
-                training: bool = True) -> Tensor:
-        # x: [L, B, D_stream]
-        return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
-
-
 class CombinedEncoder(nn.Module):
     """
     1) PBEEncoder cho LH/RH/Body (song song, độc lập)
@@ -159,33 +123,55 @@ class CommunicatingEncoderLayer(nn.Module):
     """
     Một lớp Encoder tùy chỉnh thực hiện 3 giai đoạn:
     1. Self-Attention trong mỗi luồng.
-    2. Cross-Attention đa hướng giữa các luồng.
+    2. Cross-Attention đa hướng giữa các luồng (bây giờ full: tay trái ↔ tay phải, tay trái ↔ body, tay phải ↔ body).
     3. Feed-Forward Network.
     """
 
     def __init__(self, d_model_list, nhead_list, d_ff, dropout, activation, attn_layer_factory):
         super().__init__()
 
-        # Giai đoạn 1: Self-Attention Layers
+        # Giai đoạn 1: Self-Attention Layers (giữ nguyên)
         self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
         self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
         self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
-        self.norm1_lh = LayerNorm(d_model_list[0])
-        self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
+        self.norm1_lh = nn.LayerNorm(d_model_list[0])
+        self.norm1_rh = nn.LayerNorm(d_model_list[1])
+        self.norm1_body = nn.LayerNorm(d_model_list[2])
 
-        # Giai đoạn 2: Cross-Attention & Fusion Layers
-        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
-                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
-
-        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
-                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
-
-        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
-        self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
-        self.rh_fusion_layer = nn.Linear(d_model_list[1], d_model_list[1])
+        # Giai đoạn 2: Cross-Attention & Fusion Layers (mở rộng full)
+        # Cross-Attention giữa tay trái và tay phải (giữ nguyên)
+        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], 
+                                                   kdim=d_model_list[1], vdim=d_model_list[1], 
+                                                   dropout=dropout, batch_first=False)
+        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], 
+                                                   kdim=d_model_list[0], vdim=d_model_list[0], 
+                                                   dropout=dropout, batch_first=False)
+        
+        # Thêm Cross-Attention giữa tay và body (hai chiều)
+        self.lh_to_body_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], 
+                                                     kdim=d_model_list[2], vdim=d_model_list[2], 
+                                                     dropout=dropout, batch_first=False)
+        self.rh_to_body_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], 
+                                                     kdim=d_model_list[2], vdim=d_model_list[2], 
+                                                     dropout=dropout, batch_first=False)
+        self.body_to_lh_attn = nn.MultiheadAttention(d_model_list[2], nhead_list[2], 
+                                                     kdim=d_model_list[0], vdim=d_model_list[0], 
+                                                     dropout=dropout, batch_first=False)
+        self.body_to_rh_attn = nn.MultiheadAttention(d_model_list[2], nhead_list[2], 
+                                                     kdim=d_model_list[1], vdim=d_model_list[1], 
+                                                     dropout=dropout, batch_first=False)
+        
+        # Fusion layers (mở rộng để xử lý nhiều nguồn cross-attn)
+        self.lh_fusion_from_rh = nn.Linear(d_model_list[0], d_model_list[0])
+        self.lh_fusion_from_body = nn.Linear(d_model_list[0], d_model_list[0])
+        self.rh_fusion_from_lh = nn.Linear(d_model_list[1], d_model_list[1])
+        self.rh_fusion_from_body = nn.Linear(d_model_list[1], d_model_list[1])
+        self.body_fusion_from_lh = nn.Linear(d_model_list[2], d_model_list[2])
+        self.body_fusion_from_rh = nn.Linear(d_model_list[2], d_model_list[2])
+                
         self.norm2_lh = LayerNorm(d_model_list[0])
         self.norm2_rh = LayerNorm(d_model_list[1])
+        self.norm2_body = nn.LayerNorm(d_model_list[2])
 
         # Giai đoạn 3: Feed-Forward Networks
         self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), activation, nn.Linear(d_ff, d_model_list[0]))
@@ -211,14 +197,31 @@ class CommunicatingEncoderLayer(nn.Module):
         body_x = self.norm1_body(body_x + self.dropout(body_self))
 
         # --- 2. Cross-Attention & Fusion ---
-        # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
-        lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
-        lh_fused = self.lh_fusion_layer(lh_from_rh)
+        # Cross-Attention
+        lh_from_rh, _ = self.lh_to_rh_attn(query=l_hand_x, key=r_hand_x, value=r_hand_x)
+        lh_from_body, _ = self.lh_to_body_attn(query=l_hand_x, key=body_x, value=body_x)
+
+        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x, key= l_hand_x, value=l_hand_x)
+        rh_from_body, _ = self.rh_to_body_attn(query=r_hand_x, key= body_x, value=body_x)
+
+        body_from_lh, _ = self.body_to_lh_attn(query=body_x, key= l_hand_x, value=l_hand_x)
+        body_from_rh, _ = self.body_to_rh_attn(query=body_x, key= r_hand_x, value=r_hand_x)
+
+        # Fusion
+        lh_fused_rh = self.lh_fusion_from_rh(lh_from_rh)
+        lh_fused_body = self.lh_fusion_from_body(lh_from_body)
+        lh_fused = lh_fused_rh + lh_fused_body  # Cộng để kết hợp (có thể thay bằng concat + linear nếu cần)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
 
-        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
-        rh_fused = self.rh_fusion_layer(rh_from_lh)
+        rh_fused_lh = self.rh_fusion_from_lh(rh_from_lh)
+        rh_fused_body = self.rh_fusion_from_body(rh_from_body)
+        rh_fused = rh_fused_lh + rh_fused_body  # Cộng để kết hợp
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
+        
+        body_fused_lh = self.body_fusion_from_lh(body_from_lh)
+        body_fused_rh = self.body_fusion_from_rh(body_from_rh)
+        body_fused = body_fused_lh + body_fused_rh  # Cộng để kết hợp
+        body_x = self.norm2_body(body_x + self.dropout(body_fused))
 
         # --- 3. Feed-Forward Network ---
         l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
@@ -335,7 +338,7 @@ class SiFormer(nn.Module):
             patience=patience, use_pyramid_encoder=False, distil=False
         )
 
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
+        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patience {patience}")
 
         self.projection = nn.Linear(num_hid, num_classes)
 
