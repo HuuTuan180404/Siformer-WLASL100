@@ -60,42 +60,6 @@ class PerStreamPBE(nn.Module):
         return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
 
 
-class PerStreamPBE(nn.Module):
-    """ PBEEncoder cho từng stream riêng. """
-    def __init__(self, d_model: int, nhead: int, num_layers: int,
-                 dim_feedforward: int, dropout: float,
-                 activation: nn.Module,
-                 attn_layer_factory,
-                 patience: int = 1,
-                 inner_classifiers_config: List[int] = None,
-                 projections_config: List[int] = None):
-        super().__init__()
-
-        # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
-        enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
-        encoder_layer = EncoderLayer(
-            attention=enc_attn,
-            d_model=d_model,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
-        )
-        self.encoder = PBEEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=num_layers,
-            norm=nn.LayerNorm(d_model),
-            patience=patience,
-            inner_classifiers_config=inner_classifiers_config,
-            projections_config=projections_config
-        )
-
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None,
-                key_padding_mask: Optional[Tensor] = None,
-                training: bool = True) -> Tensor:
-        # x: [L, B, D_stream]
-        return self.encoder(x, mask=mask, src_key_padding_mask=key_padding_mask, training=training)
-
-
 class CombinedEncoder(nn.Module):
     """
     1) PBEEncoder cho LH/RH/Body (song song, độc lập)
