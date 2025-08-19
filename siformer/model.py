@@ -128,15 +128,19 @@ class CombinedEncoder(nn.Module):
                  projections_config: List[int] = None):
         super().__init__()
         # 1) PBE per-stream
+        lh_classifier_config = [d_model_list[0], inner_classifiers_config[1]]
+        rh_classifier_config = [d_model_list[1], inner_classifiers_config[1]]
+        body_classifier_config = [d_model_list[2], inner_classifiers_config[1]]
+
         self.pbe_lh = PerStreamPBE(d_model_list[0], nhead_list[0], num_pbe_layers,
                                    dim_feedforward, dropout, activation, attn_layer_factory,
-                                   patience, inner_classifiers_config, projections_config)
+                                   patience, lh_classifier_config, projections_config)
         self.pbe_rh = PerStreamPBE(d_model_list[1], nhead_list[1], num_pbe_layers,
                                    dim_feedforward, dropout, activation, attn_layer_factory,
-                                   patience, inner_classifiers_config, projections_config)
+                                   patience, rh_classifier_config, projections_config)
         self.pbe_body = PerStreamPBE(d_model_list[2], nhead_list[2], num_pbe_layers,
                                      dim_feedforward, dropout, activation, attn_layer_factory,
-                                     patience, inner_classifiers_config, projections_config)
+                                     patience, body_classifier_config, projections_config)
 
         # 2) Communicating stack
         self.comm_layers = nn.ModuleList([
@@ -335,7 +339,7 @@ class SiFormer(nn.Module):
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
-        print("Feature isolated transformer")
+        print("Feature isolated transformer with Transformer -> TCN architecture")
 
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
@@ -347,7 +351,7 @@ class SiFormer(nn.Module):
         self.tcn_rh = TCN(in_channels=42)
         self.tcn_body = TCN(in_channels=24)
 
-        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
+        # self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
         self.transformer = FeatureIsolatedTransformer(
             [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
@@ -397,23 +401,36 @@ class SiFormer(nn.Module):
         new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
         new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
 
-        l_hand_tcn = self.tcn_lh(new_l_hand)  # [L, B, 42]
-        r_hand_tcn = self.tcn_rh(new_r_hand)  # [L, B, 42]
-        body_tcn = self.tcn_body(new_body)    # [L, B, 24]
+        # --- GIAI ĐOẠN 1: TRANSFORMER ENCODER ---
+        # 1. Thêm Positional Embedding
+        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
+        r_hand_in = new_r_hand + self.r_hand_embedding
+        body_in = new_body + self.body_embedding
 
-        # feature_map = self.feature_extractor(new_inputs)
-        # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = l_hand_tcn + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = r_hand_tcn + self.r_hand_embedding
-        body_in = body_tcn + self.body_embedding
+        src_list = [l_hand_in, r_hand_in, body_in]
+
+        # chỉnh lại code cho thuần tí, không mượn
+        lh_enc, rh_enc, body_enc = self.transformer.encoder(
+            src_list,
+            training=training
+        ) # Đầu ra là list 3 tensor: [L, B, 42], [L, B, 42], [L, B, 24]
+
+        # --- GIAI ĐOẠN 2: TCN (Temporal Refiner) ---
+        l_hand_tcn = self.tcn_lh(lh_enc)  # [L, B, 42]
+        r_hand_tcn = self.tcn_rh(rh_enc)  # [L, B, 42]
+        body_tcn = self.tcn_body(body_enc)    # [L, B, 24]
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
-        transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
-        ).transpose(0, 1)
+        # transformer_output = self.transformer(
+        #     [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
+        # ).transpose(0, 1)
+
+        full_features = torch.cat((l_hand_tcn, r_hand_tcn, body_tcn), dim=-1)
+
+        pooled_features = full_features.mean(dim=0)
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze(1)
+        out = self.projection(pooled_features)
         return out
 
     @staticmethod
