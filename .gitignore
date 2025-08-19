@@ -90,3 +90,5 @@ coverage.xml
 *.zip
 TUAN_TEST/
 *.pyc
+
+!out-img/*.png
