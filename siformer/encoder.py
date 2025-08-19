@@ -1,7 +1,7 @@
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-
+import logging
 from typing import Optional, Union, Callable
 
 
@@ -38,6 +38,7 @@ class PBEEncoder(nn.TransformerEncoder):
                  patience=1, inner_classifiers_config=None, projections_config=None):
         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
         print('Using custom PBEEncoder | num_layers= ', num_layers)
+        logging.info('Using custom PBEEncoder | num_layers= {num_layers}')
         self.patience = patience
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])

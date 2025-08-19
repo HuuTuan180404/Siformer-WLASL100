@@ -128,15 +128,19 @@ class CombinedEncoder(nn.Module):
                  projections_config: List[int] = None):
         super().__init__()
         # 1) PBE per-stream
+        lh_classifier_config = [d_model_list[0], inner_classifiers_config[1]]
+        rh_classifier_config = [d_model_list[1], inner_classifiers_config[1]]
+        body_classifier_config = [d_model_list[2], inner_classifiers_config[1]]
+
         self.pbe_lh = PerStreamPBE(d_model_list[0], nhead_list[0], num_pbe_layers,
                                    dim_feedforward, dropout, activation, attn_layer_factory,
-                                   patience, inner_classifiers_config, projections_config)
+                                   patience, lh_classifier_config, projections_config)
         self.pbe_rh = PerStreamPBE(d_model_list[1], nhead_list[1], num_pbe_layers,
                                    dim_feedforward, dropout, activation, attn_layer_factory,
-                                   patience, inner_classifiers_config, projections_config)
+                                   patience, rh_classifier_config, projections_config)
         self.pbe_body = PerStreamPBE(d_model_list[2], nhead_list[2], num_pbe_layers,
                                      dim_feedforward, dropout, activation, attn_layer_factory,
-                                     patience, inner_classifiers_config, projections_config)
+                                     patience, body_classifier_config, projections_config)
 
         # 2) Communicating stack
         self.comm_layers = nn.ModuleList([

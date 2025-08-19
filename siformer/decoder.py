@@ -1,5 +1,5 @@
 import uuid
-
+import logging
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -15,6 +15,7 @@ class PBEEDecoder(nn.TransformerDecoder):
     def __init__(self, decoder_layer, num_layers, norm=None, patient=1, inner_classifiers_config=None):
         super(PBEEDecoder, self).__init__(decoder_layer, num_layers, norm)
         print('Using custom PBEEDecoder | num_layers= ', num_layers)
+        logging.info('Using custom PBEEDecoder | num_layers= {num_layers}')
         self.patience = patient
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
