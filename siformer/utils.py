@@ -81,7 +81,7 @@ def evaluate(model, dataloader, device, print_stats=False):
         print("Label accuracies statistics:")
         print(str(stats) + "\n")
         logging.info("Label accuracies statistics:")
-        logging.info(str(stats) + "\n")
+        logging.info(str(stats) + " ")
 
     return pred_correct, pred_all, (pred_correct / pred_all)
 

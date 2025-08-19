@@ -321,7 +321,7 @@ def train(args):
                     top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
                 print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc) + '\n')
 
         print("\nThe top result was recorded at " + str(
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
