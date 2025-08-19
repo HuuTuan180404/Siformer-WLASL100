@@ -370,7 +370,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob',
-                  num_pbe_layers=2, num_comm_layers=1, num_enc_layers=3, 
+                  num_pbe_layers=3, num_comm_layers=1, num_enc_layers=3, 
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
@@ -390,7 +390,7 @@ class SiFormer(nn.Module):
 
         self.transformer = FeatureIsolatedTransformer(
             [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
-            selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=False,
+            selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
             num_pbe_layers=num_pbe_layers, num_comm_layers=num_comm_layers,
             inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
