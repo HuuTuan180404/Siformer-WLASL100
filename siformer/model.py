@@ -32,56 +32,66 @@ class Chomp1d(nn.Module):
         return x[:, :, :-self.chomp_size].contiguous()
     
 
-class TemporalBlock(nn.Module):
-    """Một khối cơ bản cho TCN với dilated convolution."""
-    def __init__(self, in_channels, out_channels, kernel_size: int, dilation: int, padding: int, dropout: float = 0.2):
+class ResidualTCNBlock(nn.Module):
+    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.1):
         super().__init__()
+        self.conv = DepthwiseSeparableConv(channels, channels, kernel_size, dilation=dilation, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
 
-        self.chomp1 = Chomp1d(padding)
-        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride=1, padding=padding, dilation=dilation)
-        self.relu1 = nn.ReLU()
-        self.dropout1 = nn.Dropout(dropout)
-        
-        self.chomp2 = Chomp1d(padding)
-        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=1, padding=padding, dilation=dilation)
-        self.relu2 = nn.ReLU()
-        self.dropout2 = nn.Dropout(dropout)
-
-        self.net = nn.Sequential(self.conv1, self.chomp1, self.relu1, self.dropout1,
-                                 self.conv2, self.chomp2, self.relu2, self.dropout2)
-        
-        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
-        self.relu = nn.ReLU()
-
-    def forward(self, x: Tensor) -> Tensor:
-        # x: [B, C, L] (batch, channels, seq_len)
-        out = self.net(x)
-
-        res = x if self.downsample is None else self.downsample(x)
-        return self.relu(out + res)
+    def forward(self, x):
+        out = self.conv(x)
+        return x + self.dropout(out)   # residual connection
 
 
-class TCN(nn.Module):
-    """Temporal Convolutional Network cho một stream.
-    Áp dụng trên từng luồng (LH, RH, Body) để capture temporal dependencies.
-    Input: [L, B, D] -> permute to [B, D, L] cho Conv1d.
-    Output: [L, B, D] để giữ nguyên shape cho transformer.
-    """
-    def __init__(self, in_channels, num_layers, kernel_size: int = 3, dropout: float = 0.2):
+class DepthwiseSeparableConv(nn.Module):
+    """Depthwise Separable Conv1D (nhẹ hơn conv thường)"""
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, dilation=1, dropout=0.1):
+        super().__init__()
+        padding = (kernel_size - 1) // 2 * dilation
+
+        # Depthwise
+        self.depthwise = nn.Conv1d(
+            in_channels, in_channels, kernel_size,
+            stride=stride, padding=padding, dilation=dilation,
+            groups=in_channels, bias=False
+        )
+
+        # Pointwise
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False)
+        self.norm = nn.LayerNorm(out_channels)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [B, C, L]
+        out = self.depthwise(x)
+        out = self.pointwise(out)          # [B, out_channels, L]
+        out = out.transpose(1, 2)          # [B, L, C]
+        out = self.norm(out)
+        out = F.gelu(out)
+        out = self.dropout(out)
+        return out.transpose(1, 2)         # [B, C, L]
+
+
+class ModernTCN(nn.Module):
+    def __init__(self, in_channels, hidden_dim=108, num_layers=4, kernel_size=3, dropout=0.1):
         super().__init__()
         layers = []
-        for i in range(len(num_layers)):
-            in_ch = in_channels if i == 0 else num_layers[i-1]
-            out_ch = num_layers[i]
-            dilation = 2 ** i  # Increasing dilation for receptive field
-            layers.append(TemporalBlock(in_ch, out_ch, kernel_size, dilation, (kernel_size - 1) * dilation, dropout))
+
+        # Project input lên hidden_dim
+        layers.append(nn.Conv1d(in_channels, hidden_dim, kernel_size=1))
+        
+        # Nhiều residual block
+        for i in range(num_layers):
+            dilation = 2 ** i   # tăng dần để mở rộng receptive field
+            layers.append(ResidualTCNBlock(hidden_dim, kernel_size, dilation, dropout))
+        
         self.network = nn.Sequential(*layers)
 
-    def forward(self, x: Tensor) -> Tensor:
-        # x: [L, B, D]
-        x = x.permute(1, 2, 0)  # [B, D, L] for Conv1d
-        out = self.network(x)
-        out = out.permute(2, 0, 1)  # Back to [L, B, D]
+    def forward(self, x):
+        # x: [B, L, D] -> [B, D, L]
+        x = x.transpose(1, 2)
+        out = self.network(x)     # [B, H, L]
+        out = out.transpose(1, 2) # [B, L, H]
         return out
 
 
@@ -345,9 +355,9 @@ class SiFormer(nn.Module):
         print("Feature Isolated Transformer + TCN (Hybrid Song Song)")
 
         # Branch TCN cho từng stream
-        self.tcn_lh = TCN(in_channels=42, num_layers=[num_hid])
-        self.tcn_rh = TCN(in_channels=42, num_layers=[num_hid])
-        self.tcn_body = TCN(in_channels=24, num_layers=[num_hid])
+        self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=4)
+        self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=4)
+        self.tcn_body = ModernTCN(in_channels=24, hidden_dim= num_hid, num_layers=4)
 
         # Branch Transformer
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
