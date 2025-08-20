@@ -24,6 +24,67 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
+class Chomp1d(nn.Module):
+    def __init__(self, chomp_size):
+        super().__init__()
+        self.chomp_size = chomp_size
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+
+class TemporalBlock(nn.Module):
+    """Một khối cơ bản cho TCN với dilated convolution."""
+    def __init__(self, in_channels, out_channels, kernel_size: int, dilation: int, padding: int, dropout: float = 0.2):
+        super().__init__()
+
+        self.chomp1 = Chomp1d(padding)
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, stride=1, padding=padding, dilation=dilation)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout)
+        
+        self.chomp2 = Chomp1d(padding)
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, stride=1, padding=padding, dilation=dilation)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.net = nn.Sequential(self.conv1, self.chomp1, self.relu1, self.dropout1,
+                                 self.conv2, self.chomp2, self.relu2, self.dropout2)
+        
+        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
+        self.relu = nn.ReLU()
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [B, C, L] (batch, channels, seq_len)
+        out = self.net(x)
+
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)
+
+
+class TCN(nn.Module):
+    """Temporal Convolutional Network cho một stream.
+    Áp dụng trên từng luồng (LH, RH, Body) để capture temporal dependencies.
+    Input: [L, B, D] -> permute to [B, D, L] cho Conv1d.
+    Output: [L, B, D] để giữ nguyên shape cho transformer.
+    """
+    def __init__(self, in_channels, num_layers, kernel_size: int = 3, dropout: float = 0.2):
+        super().__init__()
+        layers = []
+        for i in range(len(num_layers)):
+            in_ch = in_channels if i == 0 else num_layers[i-1]
+            out_ch = num_layers[i]
+            dilation = 2 ** i  # Increasing dilation for receptive field
+            layers.append(TemporalBlock(in_ch, out_ch, kernel_size, dilation, (kernel_size - 1) * dilation, dropout))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x: Tensor) -> Tensor:
+        # x: [L, B, D]
+        x = x.permute(1, 2, 0)  # [B, D, L] for Conv1d
+        out = self.network(x)
+        out = out.permute(2, 0, 1)  # Back to [L, B, D]
+        return out
+
+
 class PerStreamPBE(nn.Module):
     """ PBEEncoder cho từng stream riêng. """
     def __init__(self, d_model: int, nhead: int, num_layers: int,
@@ -117,7 +178,7 @@ class CombinedEncoder(nn.Module):
         feats[1] = self.norm_rh(feats[1])
         feats[2] = self.norm_body(feats[2])
         return feats  # [LH, RH, Body] đã fused
-    
+
 
 class CommunicatingEncoderLayer(nn.Module):
     """
@@ -312,7 +373,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
                               tgt_key_padding_mask=kwargs.get('tgt_key_padding_mask'),
                               memory_key_padding_mask=kwargs.get('memory_key_padding_mask'))
 
-        return output
+        return output # [1, B, 108]
 
 
 class SiFormer(nn.Module):
@@ -323,24 +384,41 @@ class SiFormer(nn.Module):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
 
+        # Branch TCN cho từng stream
+        self.tcn_lh = TCN(in_channels=42, num_layers=[num_hid])
+        self.tcn_rh = TCN(in_channels=42, num_layers=[num_hid])
+        self.tcn_body = TCN(in_channels=24, num_layers=[num_hid])
+
+        # Branch Transformer
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model=42))
         self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model=24))
 
+        self.projection = nn.Linear(num_hid, num_classes)
+
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
         self.transformer = FeatureIsolatedTransformer(
-            [42, 42, 24], [3, 3, 2, 9], num_encoder_layers=num_enc_layers, num_decoder_layers=num_dec_layers,
-            selected_attn=attn_type, IA_encoder=IA_encoder, IA_decoder=IA_decoder,
-            num_pbe_layers=num_pbe_layers, num_comm_layers=num_comm_layers,
-            inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
-            patience=patience, use_pyramid_encoder=False, distil=False
+            [42, 42, 24], [3, 3, 2, 9], 
+            num_encoder_layers=num_enc_layers, 
+            num_decoder_layers=num_dec_layers,
+            selected_attn=attn_type, 
+            IA_encoder = IA_encoder, IA_decoder = IA_decoder,
+            num_pbe_layers = num_pbe_layers, num_comm_layers = num_comm_layers,
+            inner_classifiers_config=[num_hid, num_classes], 
+            projections_config=[seq_len, 1],  
+            device=device,
+            patience=patience, 
+            use_pyramid_encoder=False, 
+            istil=False
         )
 
         print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patience {patience}")
 
-        self.projection = nn.Linear(num_hid, num_classes)
+        # Fusion
+        self.fuse = nn.Linear(num_hid*2, num_hid)
+        self.fc_out = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
          # tương đường với l_hand.shape[0  ] | số lượng record đầu vào
@@ -368,15 +446,23 @@ class SiFormer(nn.Module):
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
         batch_size = l_hand.size(0)
 
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3)) # [B, L, 21, 2] -> reshape thành [B, L, 42]
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3))
-        body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3))
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), l_hand.size(2) * l_hand.size(3)).type(dtype=torch.float32) # [B, L, 21, 2] -> reshape thành [B, L, 42]
+        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3)).type(dtype=torch.float32)
+        new_body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3)).type(dtype=torch.float32)
+
+        # ----- Branch TCN -----
+        l_hand_tcn = self.tcn_lh(new_l_hand)  
+        r_hand_tcn = self.tcn_rh(new_r_hand)  
+        body_tcn = self.tcn_body(new_body)    
+        x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
+        x_tcn = x_tcn.mean(dim=1)
         
+        # ----- Branch Transformer -----
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype=torch.float32)
+        new_l_hand = new_l_hand.permute(1, 0, 2)
+        new_r_hand = new_r_hand.permute(1, 0, 2)
+        new_body = new_body.permute(1, 0, 2)
 
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
@@ -386,11 +472,19 @@ class SiFormer(nn.Module):
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training=training
+            [l_hand_in, r_hand_in, body_in], 
+            self.class_query.repeat(1, batch_size, 1), 
+            training=training
         ).transpose(0, 1)
 
+        x_trans = transformer_output.squeeze(1)
+
+        fusion = torch.cat([x_tcn, x_trans], dim=-1)  # [B,2H]
+        fusion = self.fuse(fusion)                         # [B,H]
+        out = self.fc_out(fusion)         
+
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze(1)
+        # out = self.projection(transformer_output).squeeze(1)
         return out
 
     @staticmethod
