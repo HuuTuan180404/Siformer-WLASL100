@@ -91,6 +91,8 @@ class CombinedEncoder(nn.Module):
             for _ in range(num_comm_layers)
         ])
 
+        print('num_comm_layers', num_comm_layers)
+
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
         self.norm_rh = LayerNorm(d_model_list[1])
@@ -278,7 +280,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob',
-                  num_pbe_layers=2, num_comm_layers=1, num_enc_layers=3, 
+                  num_pbe_layers=3, num_comm_layers=2, num_enc_layers=3, 
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
@@ -298,8 +300,6 @@ class SiFormer(nn.Module):
             inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
         )
-
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
 
         self.projection = nn.Linear(num_hid, num_classes)
 
