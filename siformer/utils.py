@@ -76,12 +76,12 @@ def evaluate(model, dataloader, device, print_stats=False):
                 stats[int(labels[0][0])][1] += 1
                 pred_all += 1
 
-    if print_stats:
-        stats = {key: value[0] / value[1] for key, value in stats.items() if value[1] != 0}
-        print("Label accuracies statistics:")
-        print(str(stats) + "\n")
-        logging.info("Label accuracies statistics:")
-        logging.info(str(stats) + " ")
+    # if print_stats:
+    #     stats = {key: value[0] / value[1] for key, value in stats.items() if value[1] != 0}
+    #     print("Label accuracies statistics:")
+    #     print(str(stats) + "\n")
+    #     logging.info("Label accuracies statistics:")
+    #     logging.info(str(stats) + " ")
 
     return pred_correct, pred_all, (pred_correct / pred_all)
 
