@@ -19,6 +19,8 @@ class PBEEDecoder(nn.TransformerDecoder):
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
              for _ in range(num_layers)])
+        
+        print('PBEEDecoder: num_layers=', num_layers)
 
     def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None,
                 memory_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,

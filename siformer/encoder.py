@@ -48,6 +48,8 @@ class PBEEncoder(nn.TransformerEncoder):
              for _ in range(num_layers)]
         )
 
+        print('PBEEncoder: num_layers=', num_layers)
+
     def forward(self, src: Tensor, mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
                 training: bool = True):
         output = src
