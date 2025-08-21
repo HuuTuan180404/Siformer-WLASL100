@@ -306,13 +306,12 @@ def train(args):
                 tested_model.train(False)
                 _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=False)
                 _, _, topK_eval_acc = evaluate_top_k(tested_model, eval_loader, device)
+                print('topK_eval_acc', topK_eval_acc)
 
                 if checkpoint_id == "v":
                     test_accs_v.append(eval_acc)
                 else:
                     test_accs_t.append(eval_acc)
-
-                # _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
 
                 if topK_eval_acc > topK_result:
                     topK_result=topK_eval_acc
@@ -322,10 +321,10 @@ def train(args):
                     top_result = eval_acc
                     top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-                print("Top 1: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+                print("Top 1: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc)+ '\n')
                 logging.info("Top 1: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc) + '\n')
 
-                print("Top 5: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(topK_eval_acc))
+                print("Top 5: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(topK_eval_acc) + '\n')
                 logging.info("Top 5: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(topK_eval_acc) + '\n')
 
         print(f"\nThe best Top-1 checkpoint: {top_result_name} with accuracy {top_result}")
