@@ -310,8 +310,6 @@ class SiFormer(nn.Module):
             patience=patience, use_pyramid_encoder=False, distil=False
         )
 
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
-
         self.projection = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
