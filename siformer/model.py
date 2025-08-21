@@ -37,13 +37,22 @@ class PerStreamPBE(nn.Module):
 
         # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
         enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
-        encoder_layer = EncoderLayer(
-            attention=enc_attn,
-            d_model=d_model,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
-        )
+        # encoder_layer = EncoderLayer(
+        #     attention=enc_attn,
+        #     d_model=d_model,
+        #     d_ff=dim_feedforward,
+        #     dropout=dropout,
+        #     activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
+        # )
+
+        encoder_layer=TransformerEncoderLayer(d_model, 
+                                              nhead, 
+                                              dim_feedforward, 
+                                              dropout, 
+                                              activation="relu" if isinstance(activation, nn.ReLU) else "gelu")
+
+        encoder_layer.self_attn = enc_attn
+
         self.encoder = PBEEncoder(
             encoder_layer=encoder_layer,
             num_layers=num_layers,
@@ -90,6 +99,8 @@ class CombinedEncoder(nn.Module):
             CommunicatingEncoderLayer(d_model_list, nhead_list, dim_feedforward, dropout, activation, attn_layer_factory)
             for _ in range(num_comm_layers)
         ])
+
+        print('num_comm_layers', num_comm_layers)
 
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
