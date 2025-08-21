@@ -288,11 +288,8 @@ def train(args):
     print("\nTesting checkpointed models starting...\n")
     logging.info("\nTesting checkpointed models starting...\n")
 
-    if (os.path.exists(args.testing_set_path)):
-        # print("Testing using " + args.testing_set_path + "...\n")
-        print('file test tồn tại')
-
     top_result, top_result_name = 0, ""
+    topK_result, topK_result_name = 0, ""
     test_accs_t=[]
     test_accs_v=[]
 
@@ -308,25 +305,36 @@ def train(args):
 
                 tested_model.train(False)
                 _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
+                _, _, topK_eval_acc = evaluate_top_k(tested_model, eval_loader, device)
 
                 if checkpoint_id == "v":
                     test_accs_v.append(eval_acc)
                 else:
                     test_accs_t.append(eval_acc)
 
-                _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
+                if topK_eval_acc > topK_result:
+                    topK_result=topK_eval_acc
+                    topK_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
+
 
                 if eval_acc > top_result:
                     top_result = eval_acc
                     top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
+                
+                print("Top 1: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+                logging.info("Top 1: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc) + '\n')
 
-                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc) + '\n')
+                print("Top 5: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(topK_eval_acc))
+                logging.info("Top 5: checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(topK_eval_acc) + '\n')
 
-        print("\nThe top result was recorded at " + str(
-            top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
-        logging.info("\nThe top result was recorded at " + str(
-            top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
+        print(f"\nThe best Top-1 checkpoint: {top_result_name} with accuracy {top_result}")
+        print(f"The best Top-5 checkpoint: {topK_result_name} with accuracy {topK_result}")
+
+
+        logging.info(f"\nThe best Top-1 checkpoint: {top_result_name} with accuracy {top_result}")
+        logging.info(f"The best Top-5 checkpoint: {topK_result_name} with accuracy {topK_result}")
+
+
     else:
         print('khong test')
 

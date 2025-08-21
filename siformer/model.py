@@ -162,6 +162,8 @@ class CombinedEncoder(nn.Module):
             for _ in range(num_comm_layers)
         ])
 
+        print('num_comm_layers', num_comm_layers)
+
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
         self.norm_rh = LayerNorm(d_model_list[1])
@@ -386,7 +388,8 @@ class SiFormer(nn.Module):
             distil=False
         )
 
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
+        # print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
+        self.tcn_fusion_layer = nn.Linear(108 * 3, 108)
 
         # Fusion
         self.fuse = nn.Linear(num_hid*2, num_hid)
@@ -404,8 +407,12 @@ class SiFormer(nn.Module):
         # ----- Branch TCN -----
         l_hand_tcn = self.tcn_lh(new_l_hand)  
         r_hand_tcn = self.tcn_rh(new_r_hand)  
-        body_tcn = self.tcn_body(new_body)    
+        body_tcn = self.tcn_body(new_body)
+
+        x_tcn_combined = torch.cat([l_hand_tcn, r_hand_tcn, body_tcn], dim=-1) # Shape: [B, L, 108*3]
+
         x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
+        x_tcn = self.tcn_fusion_layer(x_tcn_combined) # Shape: [B, L, 108]
         x_tcn = x_tcn.mean(dim=1)
 
         # ----- Branch Transformer -----
