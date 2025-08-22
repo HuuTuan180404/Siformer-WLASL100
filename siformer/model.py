@@ -24,14 +24,6 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
-class Chomp1d(nn.Module):
-    def __init__(self, chomp_size):
-        super().__init__()
-        self.chomp_size = chomp_size
-    def forward(self, x):
-        return x[:, :, :-self.chomp_size].contiguous()
-    
-
 class ResidualTCNBlock(nn.Module):
     def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.1):
         super().__init__()
@@ -162,7 +154,7 @@ class CombinedEncoder(nn.Module):
             for _ in range(num_comm_layers)
         ])
 
-        print('num_comm_layers',num_comm_layers)
+        print('num_comm_layers', num_comm_layers)
 
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
@@ -204,12 +196,12 @@ class CommunicatingEncoderLayer(nn.Module):
         super().__init__()
 
         # Giai đoạn 1: Self-Attention Layers
-        self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
-        self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
-        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
-        self.norm1_lh = LayerNorm(d_model_list[0])
-        self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
+        # self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
+        # self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
+        # self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
+        # self.norm1_lh = LayerNorm(d_model_list[0])
+        # self.norm1_rh = LayerNorm(d_model_list[1])
+        # self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
         self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
@@ -238,14 +230,14 @@ class CommunicatingEncoderLayer(nn.Module):
         l_hand_x, r_hand_x, body_x = src_list[0], src_list[1], src_list[2]
 
         # --- 1. Self-Attention ---
-        lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
+        # lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
 
-        rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
+        # rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
 
-        body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        body_x = self.norm1_body(body_x + self.dropout(body_self))
+        # body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # body_x = self.norm1_body(body_x + self.dropout(body_self))
 
         # --- 2. Cross-Attention & Fusion ---
         # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
@@ -326,14 +318,16 @@ class FeatureIsolatedTransformer(nn.Transformer):
             print("TransformerDecoder")
             return TransformerDecoder(decoder_layer, self.num_decoder_layers, norm=decoder_norm)
 
-    def forward(self, src: list, tgt: Tensor, src_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None, training:bool=True, 
+    def forward(self, src: list, 
+                tgt: Tensor, 
+                src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None, 
+                training:bool=True, 
                 **kwargs) -> Tensor:
-        
+
         lh, rh, body = self.encoder(src, src_mask=src_mask,
                                     src_key_padding_mask=src_key_padding_mask,
                                     training=kwargs.get('training', True))
-
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
         full_memory = torch.cat((lh, rh, body), dim=-1) # [L, B, D_sum]
