@@ -142,12 +142,12 @@ class CommunicatingEncoderLayer(nn.Module):
         super().__init__()
 
         # Giai đoạn 1: Self-Attention Layers
-        self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
-        self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
-        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
-        self.norm1_lh = LayerNorm(d_model_list[0])
-        self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
+        # self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
+        # self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
+        # self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
+        # self.norm1_lh = LayerNorm(d_model_list[0])
+        # self.norm1_rh = LayerNorm(d_model_list[1])
+        # self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
         self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
@@ -176,14 +176,14 @@ class CommunicatingEncoderLayer(nn.Module):
         l_hand_x, r_hand_x, body_x = src_list[0], src_list[1], src_list[2]
 
         # --- 1. Self-Attention ---
-        lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
+        # lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
 
-        rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
+        # rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
 
-        body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
-        body_x = self.norm1_body(body_x + self.dropout(body_self))
+        # body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
+        # body_x = self.norm1_body(body_x + self.dropout(body_self))
 
         # --- 2. Cross-Attention & Fusion ---
         # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
@@ -191,7 +191,7 @@ class CommunicatingEncoderLayer(nn.Module):
         lh_fused = self.lh_fusion_layer(lh_from_rh)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
 
-        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
+        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x, key= l_hand_x, value=l_hand_x)
         rh_fused = self.rh_fusion_layer(rh_from_lh)
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
 
@@ -271,7 +271,6 @@ class FeatureIsolatedTransformer(nn.Transformer):
         lh, rh, body = self.encoder(src, src_mask=src_mask,
                                     src_key_padding_mask=src_key_padding_mask,
                                     training=kwargs.get('training', True))
-
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
         full_memory = torch.cat((lh, rh, body), dim=-1) # [L, B, D_sum]
@@ -353,6 +352,7 @@ class SiFormer(nn.Module):
         l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
         r_hand_in = new_r_hand + self.r_hand_embedding
         body_in = new_body + self.body_embedding
+
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
