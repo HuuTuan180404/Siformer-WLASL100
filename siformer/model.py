@@ -91,6 +91,8 @@ class CombinedEncoder(nn.Module):
             for _ in range(num_comm_layers)
         ])
 
+        print(f'num_comm_layers={num_comm_layers}')
+
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
         self.norm_rh = LayerNorm(d_model_list[1])
@@ -298,8 +300,6 @@ class SiFormer(nn.Module):
             inner_classifiers_config=[num_hid, num_classes], projections_config=[seq_len, 1],  device=device,
             patience=patience, use_pyramid_encoder=False, distil=False
         )
-
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}, patient {patience}")
 
         self.projection = nn.Linear(num_hid, num_classes)
 
