@@ -24,6 +24,77 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
+class Chomp1d(nn.Module):
+    def __init__(self, chomp_size):
+        super().__init__()
+        self.chomp_size = chomp_size
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+
+class ResidualTCNBlock(nn.Module):
+    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.1):
+        super().__init__()
+        self.conv = DepthwiseSeparableConv(channels, channels, kernel_size, dilation=dilation, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        out = self.conv(x)
+        return x + self.dropout(out)   # residual connection
+
+
+class DepthwiseSeparableConv(nn.Module):
+    """Depthwise Separable Conv1D (nhẹ hơn conv thường)"""
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, dilation=1, dropout=0.1):
+        super().__init__()
+        padding = (kernel_size - 1) // 2 * dilation
+
+        # Depthwise
+        self.depthwise = nn.Conv1d(
+            in_channels, in_channels, kernel_size,
+            stride=stride, padding=padding, dilation=dilation,
+            groups=in_channels, bias=False
+        )
+
+        # Pointwise
+        self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False)
+        self.norm = nn.LayerNorm(out_channels)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # x: [B, C, L]
+        out = self.depthwise(x)
+        out = self.pointwise(out)          # [B, out_channels, L]
+        out = out.transpose(1, 2)          # [B, L, C]
+        out = self.norm(out)
+        out = F.gelu(out)
+        out = self.dropout(out)
+        return out.transpose(1, 2)         # [B, C, L]
+
+
+class ModernTCN(nn.Module):
+    def __init__(self, in_channels, hidden_dim=108, num_layers=4, kernel_size=3, dropout=0.1):
+        super().__init__()
+        layers = []
+
+        # Project input lên hidden_dim
+        layers.append(nn.Conv1d(in_channels, hidden_dim, kernel_size=1))
+        
+        # Nhiều residual block
+        for i in range(num_layers):
+            dilation = 2 ** i   # tăng dần để mở rộng receptive field
+            layers.append(ResidualTCNBlock(hidden_dim, kernel_size, dilation, dropout))
+        
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # x: [B, L, D] -> [B, D, L]
+        x = x.transpose(1, 2)
+        out = self.network(x)     # [B, H, L]
+        out = out.transpose(1, 2) # [B, L, H]
+        return out
+
+
 class PerStreamPBE(nn.Module):
     """ PBEEncoder cho từng stream riêng. """
     def __init__(self, d_model: int, nhead: int, num_layers: int, dim_feedforward: int, dropout: float,
@@ -297,6 +368,13 @@ class SiFormer(nn.Module):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
 
+        # Branch TCN cho từng stream
+        hidden_dim=128
+        self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
+        self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
+        self.tcn_body = ModernTCN(in_channels=24, hidden_dim= hidden_dim, num_layers=4)
+        self.tcn_reshape=nn.Linear(hidden_dim, 108)
+
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
@@ -314,6 +392,7 @@ class SiFormer(nn.Module):
             patience = patience, use_pyramid_encoder = False, distil = False
         )
 
+        self.fuse = nn.Linear(num_hid*2, num_hid)
         self.projection = nn.Linear(num_hid, num_classes)
 
     def forward(self, l_hand, r_hand, body, training):
@@ -321,15 +400,23 @@ class SiFormer(nn.Module):
 
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1) # [B, L, 21, 2] -> reshape thành [B, L, 42]
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1)
-        body = body.view(body.size(0), body.size(1), -1)
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1).type(dtype = torch.float32) # [B, L, 21, 2] -> reshape thành [B, L, 42]
+        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1).type(dtype = torch.float32)
+        new_body = body.view(body.size(0), body.size(1), -1).type(dtype = torch.float32)
+
+        # ----- Branch TCN -----
+        l_hand_tcn = self.tcn_lh(new_l_hand)  
+        r_hand_tcn = self.tcn_rh(new_r_hand)  
+        body_tcn = self.tcn_body(new_body)    
+        x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
+        x_tcn = x_tcn.mean(dim=1)
+        x_tcn = self.tcn_reshape(x_tcn)
         
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype = torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype = torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype = torch.float32)
+        new_l_hand = new_l_hand.permute(1, 0, 2)
+        new_r_hand = new_r_hand.permute(1, 0, 2)
+        new_body = new_body.permute(1, 0, 2)
 
         # feature_map = self.feature_extractor(new_inputs)
         # transformer_in = feature_map + self.pos_embedding
@@ -341,9 +428,14 @@ class SiFormer(nn.Module):
         transformer_output = self.transformer(
             [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training = training
         ).transpose(0, 1)
+        x_trans = transformer_output.squeeze(1)
+
+        fusion = torch.cat([x_tcn, x_trans], dim=-1)  # [B,2H]
+
+        fusion = self.fuse(fusion)
 
         # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze(1)
+        out = self.projection(fusion)
         return out
 
     @staticmethod
