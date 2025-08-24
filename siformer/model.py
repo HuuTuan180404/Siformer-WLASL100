@@ -32,12 +32,9 @@ class PerStreamPBE(nn.Module):
                  projections_config: List[int] = None):
         super().__init__()
         
-        # encoder_layer = EncoderLayer(attention = enc_attn, d_model = d_model,
-        #                              d_ff = dim_feedforward, dropout = dropout,
-        #                              activation = "relu" if isinstance(activation, nn.ReLU) else "gelu")
-
-        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation)
-        encoder_layer.self_attn = enc_attn
+        encoder_layer = EncoderLayer(attention = enc_attn, d_model = d_model,
+                                     d_ff = dim_feedforward, dropout = dropout,
+                                     activation = activation)
 
         self.encoder = PBEEncoder(encoder_layer = encoder_layer, num_layers = num_layers,
                                   norm = nn.LayerNorm(d_model), patience = patience,
@@ -65,10 +62,8 @@ class CommunicatingEncoderLayer(nn.Module):
         # Giai đoạn 1: Self-Attention Layers nó là của Prob
         self.self_attn_lh = self_attn_list[0]
         self.self_attn_rh = self_attn_list[1]
-        self.self_attn_body = self_attn_list[2]
         self.norm1_lh = LayerNorm(d_model_list[0])
         self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
         self.lh_to_rh_attn = CrossAttention(d_model = d_model_list[0], nhead = nhead_list[0], dropout = dropout)
@@ -90,11 +85,9 @@ class CommunicatingEncoderLayer(nn.Module):
         # Giai đoạn 3: Feed-Forward Networks
         self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), activation, nn.Linear(d_ff, d_model_list[0]))
         self.ffn_rh = nn.Sequential(nn.Linear(d_model_list[1], d_ff), activation, nn.Linear(d_ff, d_model_list[1]))
-        self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), activation, nn.Linear(d_ff, d_model_list[2]))
 
         self.norm3_lh = LayerNorm(d_model_list[0])
         self.norm3_rh = LayerNorm(d_model_list[1])
-        self.norm3_body = LayerNorm(d_model_list[2])
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, src_list, src_mask = None, src_key_padding_mask = None):
@@ -106,9 +99,6 @@ class CommunicatingEncoderLayer(nn.Module):
 
         rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask = src_mask, key_padding_mask = src_key_padding_mask)
         r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
-
-        body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask = src_mask, key_padding_mask = src_key_padding_mask)
-        body_x = self.norm1_body(body_x + self.dropout(body_self))
 
         # --- 2. Cross-Attention & Fusion ---
         # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
@@ -125,7 +115,6 @@ class CommunicatingEncoderLayer(nn.Module):
         # --- 3. Feed-Forward Network ---
         l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
         r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
-        body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
 
         return [l_hand_x, r_hand_x, body_x]
 
@@ -292,7 +281,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
-                  num_pbe_layers = 3, num_comm_layers = 3, num_enc_layers = 3, 
+                  num_pbe_layers = 3, num_comm_layers = 1, num_enc_layers = 3, 
                   num_dec_layers = 2, patience = 1,
                  seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()

@@ -17,7 +17,7 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.activation = F.relu if activation == "relu" else F.gelu
 
-    def forward(self, x,src_mask=None,src_key_padding_mask=None):
+    def forward(self, x ,src_mask=None,src_key_padding_mask=None):
         # x: [L, B, D/F]
 
         new_x = self.attention(x, x, x, attn_mask=src_mask)[0]
