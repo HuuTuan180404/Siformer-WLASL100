@@ -370,10 +370,9 @@ class SiFormer(nn.Module):
 
         # Branch TCN cho từng stream
         hidden_dim=128
-        self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
-        self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
-        self.tcn_body = ModernTCN(in_channels=24, hidden_dim= hidden_dim, num_layers=4)
-        self.tcn_reshape=nn.Linear(hidden_dim, 108)
+        self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=3)
+        self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=3)
+        self.tcn_body = ModernTCN(in_channels=24, hidden_dim= num_hid, num_layers=3)
 
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
@@ -410,7 +409,6 @@ class SiFormer(nn.Module):
         body_tcn = self.tcn_body(new_body)    
         x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
         x_tcn = x_tcn.mean(dim=1)
-        x_tcn = self.tcn_reshape(x_tcn)
         
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
