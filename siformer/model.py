@@ -9,7 +9,7 @@ from torch.nn.modules.normalization import LayerNorm
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
 from typing import Optional, Union, Callable, List
-from siformer.attention import AttentionLayer, ProbAttention, FullAttention
+from siformer.attention import AttentionLayer, ProbAttention, FullAttention, CrossAttention
 from siformer.decoder import DecoderLayer, PBEEDecoder
 from siformer.encoder import  EncoderLayer, PBEEncoder
 from siformer.utils import get_sequence_list
@@ -141,11 +141,15 @@ class CommunicatingEncoderLayer(nn.Module):
         self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
-        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
-                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
+        self.lh_to_rh_attn = CrossAttention(d_model=d_model_list[0], nhead=nhead_list[0], dropout=dropout)
+        self.rh_to_lh_attn = CrossAttention(d_model=d_model_list[1], nhead=nhead_list[1], dropout=dropout)
 
-        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
-                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
+        if d_model_list[0] != d_model_list[1]:
+            self.lh_key_proj = nn.Linear(d_model_list[1], d_model_list[0])  # Project right->left dim
+            self.rh_key_proj = nn.Linear(d_model_list[0], d_model_list[1])  # Project left->right dim
+        else:
+            self.lh_key_proj = nn.Identity()
+            self.rh_key_proj = nn.Identity()
 
         # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
         self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
@@ -178,11 +182,13 @@ class CommunicatingEncoderLayer(nn.Module):
 
         # --- 2. Cross-Attention & Fusion ---
         # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
-        lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
+        rh_for_lh = self.lh_key_proj(r_hand_x)
+        lh_from_rh, _ = self.lh_to_rh_attn(query=l_hand_x, key_value=rh_for_lh, mask=src_mask)
         lh_fused = self.lh_fusion_layer(lh_from_rh)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
 
-        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
+        lh_for_rh = self.rh_key_proj(l_hand_x)
+        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x, key_value=lh_for_rh, mask=src_mask)
         rh_fused = self.rh_fusion_layer(rh_from_lh)
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
 
@@ -280,7 +286,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob',
-                  num_pbe_layers=2, num_comm_layers=1, num_enc_layers=3, 
+                  num_pbe_layers=3, num_comm_layers=1, num_enc_layers=3, 
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()

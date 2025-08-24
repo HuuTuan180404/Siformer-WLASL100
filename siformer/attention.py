@@ -7,6 +7,82 @@ import numpy as np
 from math import sqrt
 
 
+class CrossAttention(nn.Module):
+    """
+    RoPE Cross-Attention tối ưu cho Sign Language Recognition
+    - Tốt cho temporal sequences (204 frames)
+    - Hiểu được relative positions giữa các hand gestures
+    - Efficient với long sequences
+    """
+    def __init__(self, d_model=108, nhead=9, max_seq_len=204, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        self.d_k = d_model // nhead
+        self.scale = (self.d_k) ** -0.5
+        
+        # Projections for left hand (query) and right hand (key, value)
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        
+        # RoPE embeddings - critical for temporal understanding
+        self.register_buffer("cos", self._compute_cos_sin(max_seq_len, self.d_k)[0])
+        self.register_buffer("sin", self._compute_cos_sin(max_seq_len, self.d_k)[1])
+    
+    def _compute_cos_sin(self, seq_len, dim):
+        # Lower frequency for sign language temporal patterns
+        theta = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        seq = torch.arange(seq_len).float()
+        freqs = torch.outer(seq, theta)
+        return torch.cos(freqs), torch.sin(freqs)
+    
+    def _apply_rope(self, x, cos, sin):
+        seq_len = x.shape[2]
+        cos = cos[:seq_len].unsqueeze(0).unsqueeze(0)
+        sin = sin[:seq_len].unsqueeze(0).unsqueeze(0)
+        
+        x1, x2 = x[..., ::2], x[..., 1::2]
+        rotated_x1 = x1 * cos - x2 * sin
+        rotated_x2 = x1 * sin + x2 * cos
+        
+        return torch.stack([rotated_x1, rotated_x2], dim=-1).flatten(-2)
+    
+    def forward(self, query, key_value, mask=None):
+        """
+        Args:
+            left_hand: (batch, 204, d_model) - Left hand features
+            right_hand: (batch, 204, d_model) - Right hand features
+            mask: Optional attention mask
+        """
+        batch_size, seq_len, _ = query.shape
+        
+        # Project to Q, K, V
+        Q = self.w_q(query).view(batch_size, seq_len, self.nhead, self.d_k).transpose(1, 2)
+        K = self.w_k(key_value).view(batch_size, seq_len, self.nhead, self.d_k).transpose(1, 2)
+        V = self.w_v(key_value).view(batch_size, seq_len, self.nhead, self.d_k).transpose(1, 2)
+        
+        # Apply RoPE - crucial for temporal understanding
+        Q = self._apply_rope(Q, self.cos, self.sin)
+        K = self._apply_rope(K, self.cos, self.sin)
+        
+        # Cross-attention computation
+        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+        
+        if mask is not None:
+            scores.masked_fill_(mask == 0, -1e9)
+        
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        
+        attended = torch.matmul(attn_weights, V)
+        attended = attended.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
+        
+        return self.w_o(attended), attn_weights
+
+
 class TriangularCausalMask():
     def __init__(self, B, L, device="cpu"):
         mask_shape = [B, 1, L, L]
