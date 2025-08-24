@@ -286,7 +286,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid=108, attn_type='prob',
-                  num_pbe_layers=3, num_comm_layers=1, num_enc_layers=3, 
+                  num_pbe_layers=2, num_comm_layers=1, num_enc_layers=3, 
                   num_dec_layers=2, patience=1,
                  seq_len=204, device=None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
