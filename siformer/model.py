@@ -32,9 +32,12 @@ class PerStreamPBE(nn.Module):
                  projections_config: List[int] = None):
         super().__init__()
         
-        encoder_layer = EncoderLayer(attention = enc_attn, d_model = d_model,
-                                     d_ff = dim_feedforward, dropout = dropout,
-                                     activation = "relu" if isinstance(activation, nn.ReLU) else "gelu")
+        # encoder_layer = EncoderLayer(attention = enc_attn, d_model = d_model,
+        #                              d_ff = dim_feedforward, dropout = dropout,
+        #                              activation = "relu" if isinstance(activation, nn.ReLU) else "gelu")
+
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation)
+        encoder_layer.self_attn = enc_attn
 
         self.encoder = PBEEncoder(encoder_layer = encoder_layer, num_layers = num_layers,
                                   norm = nn.LayerNorm(d_model), patience = patience,
@@ -59,7 +62,7 @@ class CommunicatingEncoderLayer(nn.Module):
     def __init__(self, d_model_list, nhead_list, d_ff, dropout, activation, self_attn_list: List):
         super().__init__()
 
-        # Giai đoạn 1: Self-Attention Layers
+        # Giai đoạn 1: Self-Attention Layers nó là của Prob
         self.self_attn_lh = self_attn_list[0]
         self.self_attn_rh = self_attn_list[1]
         self.self_attn_body = self_attn_list[2]
@@ -144,8 +147,6 @@ class CombinedEncoder(nn.Module):
         self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
         self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
         self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
-
-        inner_classifiers_config_lh=[42, inner_classifiers_config[1]]
 
         # 1) PBE per-stream
         self.pbe_lh = PerStreamPBE(d_model = d_model_list[0], nhead = nhead_list[0], 
@@ -291,7 +292,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
-                  num_pbe_layers = 3, num_comm_layers = 1, num_enc_layers = 3, 
+                  num_pbe_layers = 3, num_comm_layers = 3, num_enc_layers = 3, 
                   num_dec_layers = 2, patience = 1,
                  seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
