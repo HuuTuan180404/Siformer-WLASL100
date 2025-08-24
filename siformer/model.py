@@ -35,15 +35,11 @@ class PerStreamPBE(nn.Module):
                  projections_config: List[int] = None):
         super().__init__()
 
-        # attention cho EncoderLayer (ghi chú: EncoderLayer của bạn mong self.attention forward -> Tensor)
-        enc_attn = attn_layer_factory(d_model, nhead)  # AttentionLayer(...)
-        encoder_layer = EncoderLayer(
-            attention=enc_attn,
-            d_model=d_model,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu" if isinstance(activation, nn.ReLU) else "gelu"
-        )
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation)
+        encoder_layer.self_attn = attn_layer_factory(d_model, nhead)
+
+        print(activation)
+        
         self.encoder = PBEEncoder(
             encoder_layer=encoder_layer,
             num_layers=num_layers,
