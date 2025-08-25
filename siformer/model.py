@@ -145,8 +145,6 @@ class CombinedEncoder(nn.Module):
         self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
         self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
 
-        inner_classifiers_config_lh=[42, inner_classifiers_config[1]]
-
         # 1) PBE per-stream
         self.pbe_lh = PerStreamPBE(d_model = d_model_list[0], nhead = nhead_list[0], 
                                    num_layers = num_pbe_layers,
