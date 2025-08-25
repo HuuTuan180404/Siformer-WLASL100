@@ -145,8 +145,6 @@ class CombinedEncoder(nn.Module):
         self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
         self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
 
-        inner_classifiers_config_lh=[42, inner_classifiers_config[1]]
-
         # 1) PBE per-stream
         self.pbe_lh = PerStreamPBE(d_model = d_model_list[0], nhead = nhead_list[0], 
                                    num_layers = num_pbe_layers,
@@ -188,15 +186,15 @@ class CombinedEncoder(nn.Module):
                 src_key_padding_mask: Optional[Tensor] = None, training: bool = True) -> List[Tensor]:
         l_hand_x, r_hand_x, body_x = src_list  # [L,B,D_i]
 
-        # 1) PBE per-stream
-        l_hand_x = self.pbe_lh(l_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-        r_hand_x = self.pbe_rh(r_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-        body_x   = self.pbe_body(body_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-
         # 2) Communicating stack
         feats = [l_hand_x, r_hand_x, body_x]
         for layer in self.comm_layers:
             feats = layer(feats, src_mask = src_mask, src_key_padding_mask = src_key_padding_mask)
+
+        # 1) PBE per-stream
+        l_hand_x = self.pbe_lh(l_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
+        r_hand_x = self.pbe_rh(r_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
+        body_x   = self.pbe_body(body_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)        
 
         # Norm cuối
         feats[0] = self.norm_lh(feats[0])
