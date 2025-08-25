@@ -24,23 +24,101 @@ def _get_clones(mod, n):
     return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
 
 
-class Chomp1d(nn.Module):
-    def __init__(self, chomp_size):
+class AdaptiveTemporalPooling(nn.Module):
+    """
+    Adaptive pooling để capture temporal features ở các resolutions khác nhau
+    """
+    def __init__(self, in_channels, pool_sizes=[4, 8, 16, 32]):
         super().__init__()
-        self.chomp_size = chomp_size
+        self.pool_sizes = pool_sizes
+        self.pools = nn.ModuleList([
+            nn.AdaptiveAvgPool1d(size) for size in pool_sizes
+        ])
+        
+        # Linear layers để project về cùng dimension
+        self.projections = nn.ModuleList([
+            nn.Linear(size * in_channels, in_channels) 
+            for size in pool_sizes
+        ])
+        
+        # Attention weights cho các scales
+        self.scale_attention = nn.Sequential(
+            nn.Linear(in_channels * len(pool_sizes), in_channels),
+            nn.ReLU(),
+            nn.Linear(in_channels, len(pool_sizes)),
+            nn.Softmax(dim=-1)
+        )
+        
     def forward(self, x):
-        return x[:, :, :-self.chomp_size].contiguous()
+        # x: [B, C, L]
+        B, C, L = x.shape
+        
+        # Apply adaptive pooling ở các scales khác nhau
+        pooled_features = []
+        for pool, proj in zip(self.pools, self.projections):
+            pooled = pool(x)  # [B, C, pool_size]
+            pooled = pooled.reshape(B, -1)  # [B, C * pool_size]
+            pooled = proj(pooled)  # [B, C]
+            pooled_features.append(pooled)
+        
+        # Concatenate tất cả scales
+        all_scales = torch.stack(pooled_features, dim=1)  # [B, num_scales, C]
+        
+        # Compute attention weights cho các scales
+        scale_weights = self.scale_attention(all_scales.view(B, -1))  # [B, num_scales]
+        scale_weights = scale_weights.unsqueeze(-1)  # [B, num_scales, 1]
+        
+        # Weighted combination
+        output = torch.sum(all_scales * scale_weights, dim=1)  # [B, C]
+        
+        return output, scale_weights.squeeze(-1)
 
 
 class ResidualTCNBlock(nn.Module):
-    def __init__(self, channels, kernel_size=3, dilation=1, dropout=0.1):
+    def __init__(self, channels, kernel_size=3, dilations=[1, 2, 4], dropout=0.1):
         super().__init__()
-        self.conv = DepthwiseSeparableConv(channels, channels, kernel_size, dilation=dilation, dropout=dropout)
+        self.dilations = dilations
+        self.num_scales = len(dilations)
+
+        channels_per_scale = channels // self.num_scales
+        remainder_channels = channels % self.num_scales
+        
+        scale_channels = [channels_per_scale] * self.num_scales
+        # Phân bổ phần dư cho các nhánh đầu tiên
+        for i in range(remainder_channels):
+            scale_channels[i] += 1
+
+        self.multi_conv = nn.ModuleList([
+            DepthwiseSeparableConv(channels, scale_channels[i], kernel_size, dilation=d, dropout=dropout) 
+            for i, d in enumerate(dilations)])
+        
+        self.projection = nn.Conv1d(sum(scale_channels), channels, kernel_size=1, bias=False)
+        self.norm = nn.GroupNorm(min(32, channels//4), channels)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        out = self.conv(x)
-        return x + self.dropout(out)   # residual connection
+        identity = x
+        multi_scale_outputs = []
+        for conv in self.multi_conv:
+            out = conv(x)
+            multi_scale_outputs.append(out)
+        
+        # Concatenate outputs từ các scales
+        out = torch.cat(multi_scale_outputs, dim=1)  # [B, C, L]
+        
+        # Project về original dimension
+        out = self.projection(out)
+        
+        # Residual connection
+        out = out + identity
+        
+        # Normalize
+        # out = out.transpose(1, 2)  # [B, L, C]
+        out = self.norm(out)
+        out = F.gelu(out)
+        out = self.dropout(out)
+        
+        return out  # [B, C, L]
 
 
 class DepthwiseSeparableConv(nn.Module):
@@ -58,40 +136,130 @@ class DepthwiseSeparableConv(nn.Module):
 
         # Pointwise
         self.pointwise = nn.Conv1d(in_channels, out_channels, kernel_size=1, bias=False)
-        self.norm = nn.LayerNorm(out_channels)
+        num_groups = 1
+        if out_channels % 7 == 0:
+            num_groups = 7
+        elif out_channels % 4 == 0: # Một lựa chọn khác
+             num_groups = 4
+        # Bạn có thể thêm các logic tìm ước số phức tạp hơn nếu cần
+        self.norm = nn.GroupNorm(num_groups=num_groups, num_channels=out_channels)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # x: [B, C, L]
         out = self.depthwise(x)
         out = self.pointwise(out)          # [B, out_channels, L]
-        out = out.transpose(1, 2)          # [B, L, C]
-        out = self.norm(out)
-        out = F.gelu(out)
-        out = self.dropout(out)
-        return out.transpose(1, 2)         # [B, C, L]
+        # out = out.transpose(1, 2)          # [B, L, C]
+        # out = self.norm(out)
+        # out = F.gelu(out)
+        # out = self.dropout(out)
+        return out    # [B, C, L]
 
 
-class ModernTCN(nn.Module):
-    def __init__(self, in_channels, hidden_dim=108, num_layers=4, kernel_size=3, dropout=0.1):
+class ModernTCN(nn.Module): # đầu vào: [B, D, L]
+    def __init__(self, in_channels, hidden_dim=128, num_layers=6, 
+                 kernel_size=3, base_dilation=1, dropout=0.1,
+                 use_adaptive_pooling=True):
         super().__init__()
-        layers = []
-
-        # Project input lên hidden_dim
-        layers.append(nn.Conv1d(in_channels, hidden_dim, kernel_size=1))
         
-        # Nhiều residual block
+        # Input projection
+        self.input_proj = nn.Conv1d(in_channels, hidden_dim, kernel_size=1)
+        
+        # Multi-scale residual blocks
+        self.residual_blocks = nn.ModuleList()
+        
         for i in range(num_layers):
-            dilation = 2 ** i   # tăng dần để mở rộng receptive field
-            layers.append(ResidualTCNBlock(hidden_dim, kernel_size, dilation, dropout))
+            # Progressive dilation expansion
+            dilations = [
+                base_dilation * (2 ** j) for j in range(3)  # [1, 2, 4] hoặc [2, 4, 8]
+            ]
+            
+            block = ResidualTCNBlock(
+                channels=hidden_dim,
+                kernel_size=kernel_size,
+                dilations=dilations,
+                dropout=dropout
+            )
+            self.residual_blocks.append(block)
+            
+            # Double base dilation mỗi 2 layers để expand receptive field
+            if (i + 1) % 2 == 0:
+                base_dilation *= 2
         
-        self.network = nn.Sequential(*layers)
-
+        # Adaptive temporal pooling (optional)
+        self.use_adaptive_pooling = use_adaptive_pooling
+        if use_adaptive_pooling:
+            self.adaptive_pool = AdaptiveTemporalPooling(
+                in_channels=hidden_dim,
+                pool_sizes=[4, 8, 16, 32]
+            )
+        
+        # Cross-scale attention
+        self.cross_scale_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=8,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # Final projection
+        self.output_norm = nn.GroupNorm(min(32, hidden_dim//4), hidden_dim)
+        self.output_proj = nn.Linear(hidden_dim, hidden_dim)
+        
     def forward(self, x):
         # x: [B, L, D] -> [B, D, L]
         x = x.transpose(1, 2)
-        out = self.network(x)     # [B, H, L]
-        out = out.transpose(1, 2) # [B, L, H]
+        
+        # Input projection
+        out = self.input_proj(x)  # [B, hidden_dim, L]
+        
+        # Store intermediate outputs cho cross-scale attention
+        scale_outputs = []
+        
+        # Apply multi-scale residual blocks
+        for i, block in enumerate(self.residual_blocks):
+            out = block(out)
+            
+            # Store outputs từ mỗi layer cho cross-attention
+            if i % 2 == 1:  # Mỗi 2 layers
+                scale_outputs.append(out.transpose(1, 2))  # [B, L, C]
+        
+        # Cross-scale attention giữa các layers
+        if len(scale_outputs) > 1:
+            # Concatenate outputs từ các scales
+            stacked_outputs = torch.stack(scale_outputs, dim=1)  # [B, num_scales, L, C]
+            B, S, L, C = stacked_outputs.shape
+            
+            # Reshape cho attention
+            stacked_outputs = stacked_outputs.reshape(B * S, L, C)
+            
+            # Self-attention across scales
+            attended, attention_weights = self.cross_scale_attention(
+                stacked_outputs, stacked_outputs, stacked_outputs
+            )
+            
+            # Reshape back và average
+            attended = attended.reshape(B, S, L, C)
+            out = attended.mean(dim=1).transpose(1, 2)  # [B, C, L]
+        
+        # Convert back: [B, C, L] -> [B, L, C]
+        # out = out.transpose(1, 2)
+        
+        # Adaptive temporal pooling (optional)
+        if self.use_adaptive_pooling:
+            # adaptive_pool nhận vào [B, C, L] và trả ra [B, C]
+            pooled_output, pool_weights = self.adaptive_pool(out)
+            # Broadcast pooled features lại thành sequence length
+            pooled_expanded = pooled_output.unsqueeze(-1).expand(-1, -1, out.size(2))
+            
+            # Combine với original output
+            out = out + 0.1 * pooled_expanded # out vẫn là [B, C, L]
+        
+        # Final normalization và projection
+        # out = out.transpose(1, 2)  # [B, C, L]
+        out = self.output_norm(out).transpose(1, 2)
+        out = self.output_proj(out)
+        
         return out
 
 
@@ -370,9 +538,9 @@ class SiFormer(nn.Module):
 
         # Branch TCN cho từng stream
         hidden_dim=128
-        self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
-        self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= hidden_dim, num_layers=6)
-        self.tcn_body = ModernTCN(in_channels=24, hidden_dim= hidden_dim, num_layers=4)
+        self.tcn_lh = ModernTCN(in_channels=42, num_layers=4)
+        self.tcn_rh = ModernTCN(in_channels=42, num_layers=4)
+        self.tcn_body = ModernTCN(in_channels=24, num_layers=4)
         self.tcn_reshape=nn.Linear(hidden_dim, 108)
 
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
@@ -408,7 +576,7 @@ class SiFormer(nn.Module):
         l_hand_tcn = self.tcn_lh(new_l_hand)  
         r_hand_tcn = self.tcn_rh(new_r_hand)  
         body_tcn = self.tcn_body(new_body)    
-        x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
+        x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3
         x_tcn = x_tcn.mean(dim=1)
         x_tcn = self.tcn_reshape(x_tcn)
         
