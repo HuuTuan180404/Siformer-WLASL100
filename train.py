@@ -32,7 +32,7 @@ def get_default_args():
     parser.add_argument("--num_classes", type=int, default=100, help="Number of classes to be recognized by the model")
     parser.add_argument("--batch_size", type=int, default=24, help="Number of batch size")
     parser.add_argument("--num_worker", type=int, default=0, help="Number of workers")
-    parser.add_argument("--num_seq_elements", type=int, default=108, # [21(hand)*2 +12(body) ]*2
+    parser.add_argument("--num_seq_elements", type=int, default=96, # [21(hand)*2 +12(body) ]*2
                         help="Hidden dimension of the underlying Transformer model")
     parser.add_argument("--seed", type=int, default=379,
                         help="Seed with which to initialize all the random components of the training")

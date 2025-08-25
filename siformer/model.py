@@ -260,7 +260,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
     def get_custom_decoder(self, nhead):
         decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
         decoder_norm = LayerNorm(self.d_model)
-        self.inner_classifiers_config[0] = 108
+        self.inner_classifiers_config[0] = self.d_model
         return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm = decoder_norm,
                            inner_classifiers_config = self.inner_classifiers_config, patient = self.patience)
 
@@ -288,7 +288,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 
 class SiFormer(nn.Module):
-    def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
+    def __init__(self, num_classes, num_hid = 96, attn_type = 'prob',
                   num_pbe_layers = 3, num_comm_layers = 1, num_enc_layers = 3, 
                   num_dec_layers = 2, patience = 1,
                  seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
@@ -298,11 +298,11 @@ class SiFormer(nn.Module):
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
         self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
         self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
-        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 24))
+        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 12))
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
         self.transformer = FeatureIsolatedTransformer(
-            d_model_list = [42, 42, 24], nhead_list = [3, 3, 2, 9], 
+            d_model_list = [42, 42, 12], nhead_list = [3, 3, 2, 8],
             num_encoder_layers = num_enc_layers, num_decoder_layers = num_dec_layers,
             selected_attn = attn_type, 
             IA_encoder = IA_encoder, IA_decoder = IA_decoder,

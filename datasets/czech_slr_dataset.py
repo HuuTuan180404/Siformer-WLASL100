@@ -1,5 +1,6 @@
 import ast
 import torch
+import numpy as np
 
 import pandas as pd
 import torch.utils.data as torch_data
@@ -142,7 +143,22 @@ OUTPUT:
 
 
 def isolate_single_body_dit(row: dict):
-    body_identifiers = BODY_IDENTIFIERS  # [0:6] on face [6:] on body
+    # body_identifiers = BODY_IDENTIFIERS  # [0:6] on face [6:] on body
+
+    body_identifiers = [
+    # "nose", # mũi #
+    # "neck", # cái cổ #
+    # "rightEye", # mắt phải #
+    # "leftEye", # mắt trái  #
+    # "rightEar", # tai phải #
+    # "leftEar", # tai trái # 
+    "rightShoulder", # vai phải #
+    "leftShoulder", # vai trái #
+    "rightElbow", # cùi chỏ phải #
+    "leftElbow", # cùi chỏ trái #
+    "rightWrist", # cổ tay phải  #
+    "leftWrist" # cổ tay trái #
+    ]
 
     body_dit = {key: row[key] for key in body_identifiers if key in row}
     # print(f'Keys of the extracted body dit: {list(body_dit.keys())} of length of {len(body_dit.keys())}')
