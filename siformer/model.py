@@ -88,10 +88,10 @@ class ModernTCN(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, x):
-        # x: [B, L, D] -> [B, D, L]
-        x = x.transpose(1, 2)
+        # x: [L, B, D] -> [B, D, L]
+        x = x.permute(1, 2, 0)
         out = self.network(x)     # [B, H, L]
-        out = out.transpose(1, 2) # [B, L, H]
+        out = out.permute(2, 0, 1)    # [L, B, H]
         return out
 
 
@@ -360,6 +360,7 @@ class SiFormer(nn.Module):
         self.tcn_lh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=4)
         self.tcn_rh = ModernTCN(in_channels=42, hidden_dim= num_hid, num_layers=4)
         self.tcn_body = ModernTCN(in_channels=24, hidden_dim= num_hid, num_layers=4)
+        self.fuse_tcn = nn.Linear(num_hid*3, num_hid)
 
         # Branch Transformer
         # self.feature_extractor = FeatureExtractor(num_hid=108, kernel_size=7)
@@ -376,7 +377,7 @@ class SiFormer(nn.Module):
             num_encoder_layers=num_enc_layers, 
             num_decoder_layers=num_dec_layers,
             selected_attn=attn_type, 
-            IA_encoder=IA_encoder, 
+            IA_encoder=IA_encoder,
             IA_decoder=IA_decoder,
             num_pbe_layers=num_pbe_layers, 
             num_comm_layers=num_comm_layers,
@@ -403,13 +404,6 @@ class SiFormer(nn.Module):
         new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), r_hand.size(2) * r_hand.size(3)).type(dtype=torch.float32)
         new_body = body.view(body.size(0), body.size(1), body.size(2) * body.size(3)).type(dtype=torch.float32)
 
-        # ----- Branch TCN -----
-        l_hand_tcn = self.tcn_lh(new_l_hand)  
-        r_hand_tcn = self.tcn_rh(new_r_hand)  
-        body_tcn = self.tcn_body(new_body)    
-        x_tcn = (l_hand_tcn + r_hand_tcn + body_tcn) / 3 # [B,L,D]
-        x_tcn = x_tcn.mean(dim=1)
-
         # ----- Branch Transformer -----
         # (batch_size, seq_len, feature_size) : (24, 204, 108)
         # -> (seq_len, batch_size, feature_size): (204, 24, 108)
@@ -420,6 +414,14 @@ class SiFormer(nn.Module):
         l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
         r_hand_in = new_r_hand + self.r_hand_embedding # [L, B, D]
         body_in = new_body + self.body_embedding
+
+        # ----- Branch TCN -----
+        l_hand_tcn = self.tcn_lh(new_l_hand)  # [L, B, H]
+        r_hand_tcn = self.tcn_rh(new_r_hand)  
+        body_tcn = self.tcn_body(new_body)    
+        x_tcn = torch.cat([l_hand_tcn, r_hand_tcn, body_tcn], dim=-1)  # [L, B, 3H]
+        x_tcn = self.fuse_tcn(x_tcn)  # [L, B, H]
+        x_tcn = x_tcn.mean(dim=0) # mean over L -> [B, H]
 
         # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
         transformer_output = self.transformer(
