@@ -260,7 +260,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
     def get_custom_decoder(self, nhead):
         decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
         decoder_norm = LayerNorm(self.d_model)
-        self.inner_classifiers_config[0] = 108
+        self.inner_classifiers_config[0] = self.d_model
         return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm = decoder_norm,
                            inner_classifiers_config = self.inner_classifiers_config, patient = self.patience)
 
