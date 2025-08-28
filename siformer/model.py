@@ -68,15 +68,21 @@ class CommunicatingEncoderLayer(nn.Module):
         self.norm1_body = LayerNorm(d_model_list[2])
 
         # Giai đoạn 2: Cross-Attention & Fusion Layers
-        self.lh_to_rh_attn = CrossAttention(d_model = d_model_list[0], nhead = nhead_list[0], dropout = dropout)
-        self.rh_to_lh_attn = CrossAttention(d_model = d_model_list[1], nhead = nhead_list[1], dropout = dropout)
+        # self.lh_to_rh_attn = CrossAttention(d_model = d_model_list[0], nhead = nhead_list[0], dropout = dropout)
+        # self.rh_to_lh_attn = CrossAttention(d_model = d_model_list[1], nhead = nhead_list[1], dropout = dropout)
 
-        if d_model_list[0] !=  d_model_list[1]:
-            self.lh_key_proj = nn.Linear(d_model_list[1], d_model_list[0])  # Project right->left dim
-            self.rh_key_proj = nn.Linear(d_model_list[0], d_model_list[1])  # Project left->right dim
-        else:
-            self.lh_key_proj = nn.Identity()
-            self.rh_key_proj = nn.Identity()
+        # if d_model_list[0] !=  d_model_list[1]:
+        #     self.lh_key_proj = nn.Linear(d_model_list[1], d_model_list[0])  # Project right->left dim
+        #     self.rh_key_proj = nn.Linear(d_model_list[0], d_model_list[1])  # Project left->right dim
+        # else:
+        #     self.lh_key_proj = nn.Identity()
+        #     self.rh_key_proj = nn.Identity()
+
+        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
+                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
+
+        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
+                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
 
         # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
         self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
@@ -109,13 +115,21 @@ class CommunicatingEncoderLayer(nn.Module):
 
         # --- 2. Cross-Attention & Fusion ---
         # lh_from_body, _ = self.lh_to_body_attn(l_hand_x, body_x, body_x)
-        rh_for_lh = self.lh_key_proj(r_hand_x)
-        lh_from_rh, _ = self.lh_to_rh_attn(query = l_hand_x, key_value = rh_for_lh, mask = src_mask)
+        # rh_for_lh = self.lh_key_proj(r_hand_x)
+        # lh_from_rh, _ = self.lh_to_rh_attn(query = l_hand_x, key_value = rh_for_lh, mask = src_mask)
+        # lh_fused = self.lh_fusion_layer(lh_from_rh)
+        # l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
+
+        # lh_for_rh = self.rh_key_proj(l_hand_x)
+        # rh_from_lh, _ = self.rh_to_lh_attn(query = r_hand_x, key_value = lh_for_rh, mask = src_mask)
+        # rh_fused = self.rh_fusion_layer(rh_from_lh)
+        # r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
+
+        lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
         lh_fused = self.lh_fusion_layer(lh_from_rh)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
 
-        lh_for_rh = self.rh_key_proj(l_hand_x)
-        rh_from_lh, _ = self.rh_to_lh_attn(query = r_hand_x, key_value = lh_for_rh, mask = src_mask)
+        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
         rh_fused = self.rh_fusion_layer(rh_from_lh)
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
 
