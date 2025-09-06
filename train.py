@@ -391,6 +391,8 @@ if __name__ == '__main__':
         testing_set_path="datasets/WLASL100_val_25fps.csv",
         validation_set="split-from-train",
         num_classes=100,
+        num_enc_layers = 2,
+        num_dec_layers =2,
         IA_decoder=True,
         num_worker=2
     )
