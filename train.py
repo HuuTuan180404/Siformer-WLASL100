@@ -85,6 +85,7 @@ def get_default_args():
     # Model settings
     parser.add_argument("--attn_type", type=str, default='prob', help="The attention mechanism used by the model")
     parser.add_argument("--num_enc_layers", type=int, default=3, help="Determines the number of encoder layers")
+    parser.add_argument("--num_com_layers", type=int, default=1, help="Determines the number of communicating layers")
     parser.add_argument("--num_dec_layers", type=int, default=2, help="Determines the number of decoder layers")
     parser.add_argument("--FIM", type=bool, default=True, help=" ")
     parser.add_argument("--IA_encoder", type=bool, default=True, help="Determines whether input adaptive encoder will be used")
@@ -126,6 +127,7 @@ def train(args):
     # Construct the model
     if args.FIM:
         slr_model = SiFormer(num_classes=args.num_classes, num_hid=args.num_seq_elements, attn_type=args.attn_type,
+                             num_comm_layers=args.num_com_layers,
                               num_enc_layers=args.num_enc_layers, num_dec_layers=args.num_dec_layers, device=device,
                               IA_encoder=args.IA_encoder, IA_decoder=args.IA_decoder,
                               patience=args.patience)
@@ -384,7 +386,6 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
 
-    # Đặt default cho args giống file .sh
     parser.set_defaults(
         experiment_name="WLASL100",
         training_set_path="datasets/WLASL100_train_25fps.csv",
@@ -392,7 +393,11 @@ if __name__ == '__main__':
         validation_set="split-from-train",
         num_classes=100,
         IA_decoder=True,
-        num_worker=2
+        num_worker=2,
+        num_com_layers=1,
+        num_enc_layers =3,
+        num_dec_layers=2,
+        patience=3
     )
 
     args = parser.parse_args()

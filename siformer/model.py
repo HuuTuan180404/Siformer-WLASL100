@@ -78,9 +78,11 @@ class CommunicatingEncoderLayer(nn.Module):
         #     self.lh_key_proj = nn.Identity()
         #     self.rh_key_proj = nn.Identity()
 
+        # rh truyền cho lh
         self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
                                                    vdim=d_model_list[1], dropout=dropout, batch_first=False)
 
+        # lh truyền cho rh
         self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
                                                    vdim=d_model_list[0], dropout=dropout, batch_first=False)
 
@@ -147,7 +149,7 @@ class CombinedEncoder(nn.Module):
     2) Một stack CommunicatingEncoderLayer để cross-attend & fuse
     """
     def __init__(self, d_model_list: List[int], nhead_list: List[int],
-                 num_pbe_layers: int, num_comm_layers: int,
+                 num_encoder_layers: int, num_comm_layers: int,
                  dim_feedforward: int, dropout: float,
                  activation: nn.Module, attn_layer_factory, patience: int = 1,
                  inner_classifiers_config: List[int] = None,
@@ -160,26 +162,26 @@ class CombinedEncoder(nn.Module):
         self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
 
         # 1) PBE per-stream
-        self.pbe_lh = PerStreamPBE(d_model = d_model_list[0], nhead = nhead_list[0], 
-                                   num_layers = num_pbe_layers,
-                                   dim_feedforward = dim_feedforward, dropout = dropout, 
+        self.pbe_lh = PerStreamPBE(d_model = d_model_list[0], nhead = nhead_list[0],
+                                   num_layers = num_encoder_layers,
+                                   dim_feedforward = dim_feedforward, dropout = dropout,
                                    activation = activation, enc_attn = self.self_attn_lh,
-                                   patience = patience, inner_classifiers_config=[d_model_list[0], inner_classifiers_config[1]], 
+                                   patience = patience, inner_classifiers_config=[d_model_list[0], inner_classifiers_config[1]],
                                    projections_config=projections_config)
         
-        self.pbe_rh = PerStreamPBE(d_model = d_model_list[1], nhead = nhead_list[1], 
-                                   num_layers = num_pbe_layers,
-                                   dim_feedforward = dim_feedforward, dropout = dropout, 
+        self.pbe_rh = PerStreamPBE(d_model = d_model_list[1], nhead = nhead_list[1],
+                                   num_layers = num_encoder_layers,
+                                   dim_feedforward = dim_feedforward, dropout = dropout,
                                    activation = activation, enc_attn = self.self_attn_rh,
-                                   patience = patience, inner_classifiers_config=[d_model_list[1], inner_classifiers_config[1]], 
+                                   patience = patience, inner_classifiers_config=[d_model_list[1], inner_classifiers_config[1]],
                                    projections_config=projections_config)
         
-        self.pbe_body = PerStreamPBE(d_model = d_model_list[2], nhead = nhead_list[2], 
-                                   num_layers = num_pbe_layers,
-                                   dim_feedforward = dim_feedforward, dropout = dropout, 
-                                   activation = activation, enc_attn = self.self_attn_body,
-                                   patience = patience, inner_classifiers_config=[d_model_list[2], inner_classifiers_config[1]], 
-                                   projections_config=projections_config)
+        self.pbe_body = PerStreamPBE(d_model = d_model_list[2], nhead = nhead_list[2],
+                                     num_layers = num_encoder_layers,
+                                     dim_feedforward = dim_feedforward, dropout = dropout,
+                                     activation = activation, enc_attn = self.self_attn_body,
+                                     patience = patience, inner_classifiers_config=[d_model_list[2], inner_classifiers_config[1]],
+                                     projections_config=projections_config)
 
         # 2) Communicating stack
         self.comm_layers = nn.ModuleList([
@@ -198,7 +200,7 @@ class CombinedEncoder(nn.Module):
 
     def forward(self, src_list: List[Tensor], src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None, training: bool = True) -> List[Tensor]:
-        l_hand_x, r_hand_x, body_x = src_list  # [L,B,D_i]
+        l_hand_x, r_hand_x, body_x = src_list  # [L, B, D_i]
 
         # 2) Communicating stack
         feats = [l_hand_x, r_hand_x, body_x]
@@ -218,8 +220,9 @@ class CombinedEncoder(nn.Module):
 
 
 class FeatureIsolatedTransformer(nn.Transformer):
-    def __init__(self, d_model_list: list, nhead_list: list, num_encoder_layers: int, num_decoder_layers: int,
-                 num_pbe_layers: int, num_comm_layers: int,
+    def __init__(self, d_model_list: list, nhead_list: list,
+                 num_comm_layers: int,
+                 num_encoder_layers: int, num_decoder_layers: int,
                  dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
@@ -257,7 +260,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
         self.encoder = CombinedEncoder(
             d_model_list = d_model_list,
             nhead_list = nhead_list,
-            num_pbe_layers = num_pbe_layers,
+            num_encoder_layers= num_encoder_layers,
             num_comm_layers = num_comm_layers,
             dim_feedforward = dim_feedforward,
             dropout = dropout,
@@ -303,8 +306,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
-                  num_pbe_layers = 3, num_comm_layers = 1, num_enc_layers = 3, 
-                  num_dec_layers = 2, patience = 1,
+                  num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, patience = 1,
                  seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
@@ -316,12 +318,12 @@ class SiFormer(nn.Module):
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
         self.transformer = FeatureIsolatedTransformer(
-            d_model_list = [42, 42, 24], nhead_list = [3, 3, 2, 9], 
+            d_model_list = [42, 42, 24], nhead_list = [3, 3, 2, 9],
+            num_comm_layers=num_comm_layers,
             num_encoder_layers = num_enc_layers, num_decoder_layers = num_dec_layers,
             selected_attn = attn_type, 
             IA_encoder = IA_encoder, IA_decoder = IA_decoder,
-            num_pbe_layers = num_pbe_layers, num_comm_layers = num_comm_layers,
-            inner_classifiers_config = [num_hid, num_classes], 
+            inner_classifiers_config = [num_hid, num_classes],
             projections_config = [seq_len, 1],  device = device,
             patience = patience, use_pyramid_encoder = False, distil = False
         )
