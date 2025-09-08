@@ -46,7 +46,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
         pred_correct += torch.sum(preds == labels.view(-1)).item()
         pred_all += labels.size(0)
 
-    ee_lh, ee_rh, ee_body = model.get_early_exit_stats()
+    _, (ee_lh, ee_rh, ee_body) = model.get_early_exit_stats()
     
     early_exit_total = min(total_samples, max(ee_lh, ee_rh, ee_body))
 
@@ -95,7 +95,9 @@ def evaluate(model, dataloader, device, print_stats=False):
                 stats[int(labels[0][0])][1] += 1
                 pred_all += 1
 
-    ee_lh, ee_rh, ee_body = model.get_early_exit_stats()
+    _, (ee_lh, ee_rh, ee_body) = model.get_early_exit_stats()
+
+
     early_exit_total = min(total_samples, max(ee_lh, ee_rh, ee_body))
     print(f"VAL: Early exit: {early_exit_total}, Total: {total_samples} | ({early_exit_total/total_samples:.2%})")
 
