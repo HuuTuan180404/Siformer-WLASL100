@@ -397,7 +397,7 @@ if __name__ == '__main__':
         num_com_layers=1,
         num_enc_layers =3,
         num_dec_layers=5,
-        patience=0
+        patience=4
     )
 
     args = parser.parse_args()
