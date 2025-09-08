@@ -10,6 +10,10 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
     pred_correct, pred_all = 0, 0
     running_loss = 0.0
     train_time_sec_list = []
+
+    total_samples = 0
+    model.set_early_exit_stats()
+
     for i, data in enumerate(dataloader):
         l_hands, r_hands, bodies, labels = data
 
@@ -20,6 +24,9 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
 
         optimizer.zero_grad()
         start_time = time.time()
+
+        batch_size = l_hands.size(0)
+        total_samples += batch_size
 
         outputs = model(l_hands, r_hands, bodies, training=True)
 
@@ -39,6 +46,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
         pred_correct += torch.sum(preds == labels.view(-1)).item()
         pred_all += labels.size(0)
 
+    ee_lh, ee_rh, ee_body = model.get_early_exit_stats()
+    
+    early_exit_total = min(total_samples, max(ee_lh, ee_rh, ee_body))
+
+    print(f"TRAIN: Early exit: {early_exit_total}, Total: {total_samples} | ({early_exit_total/total_samples:.2%})")
+
     if scheduler:
         scheduler.step()
 
@@ -51,6 +64,9 @@ def evaluate(model, dataloader, device, print_stats=False):
     pred_correct, pred_all = 0, 0
     stats = {i: [0, 0] for i in range(100)}
 
+    total_samples = 0
+    model.set_early_exit_stats()
+
     with torch.no_grad():
         for i, data in enumerate(dataloader):
             l_hands, r_hands, bodies, labels = data
@@ -58,6 +74,9 @@ def evaluate(model, dataloader, device, print_stats=False):
             r_hands = r_hands.to(device)  # [24, 204, 21, 2]
             bodies = bodies.to(device)  # [24, 204, 12, 2]
             labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+            batch_size = l_hands.size(0)
+            total_samples += batch_size
 
             for j in range(labels.size(0)):
                 l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
@@ -75,6 +94,10 @@ def evaluate(model, dataloader, device, print_stats=False):
 
                 stats[int(labels[0][0])][1] += 1
                 pred_all += 1
+
+    ee_lh, ee_rh, ee_body = model.get_early_exit_stats()
+    early_exit_total = min(total_samples, max(ee_lh, ee_rh, ee_body))
+    print(f"VAL: Early exit: {early_exit_total}, Total: {total_samples} | ({early_exit_total/total_samples:.2%})")
 
     if print_stats:
         stats = {key: value[0] / value[1] for key, value in stats.items() if value[1] != 0}

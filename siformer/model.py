@@ -46,9 +46,7 @@ class PerStreamPBE(nn.Module):
                 training: bool = True) -> Tensor:
         # x: [L, B, D_stream]
 
-        result= self.encoder(x, mask = mask, src_key_padding_mask = key_padding_mask, training = training)
-        print(result.early_exit_samples)
-        return result
+        return self.encoder(x, mask = mask, src_key_padding_mask = key_padding_mask, training = training)
 
 
 class CommunicatingEncoderLayer(nn.Module):
@@ -201,6 +199,7 @@ class CombinedEncoder(nn.Module):
         self.norm_rh = LayerNorm(d_model_list[1])
         self.norm_body = LayerNorm(d_model_list[2])
 
+
     def forward(self, src_list: List[Tensor], src_mask: Optional[Tensor] = None,
                 src_key_padding_mask: Optional[Tensor] = None, training: bool = True) -> List[Tensor]:
         l_hand_x, r_hand_x, body_x = src_list  # [L, B, D_i]
@@ -332,6 +331,18 @@ class SiFormer(nn.Module):
         )
 
         self.projection = nn.Linear(num_hid, num_classes)
+
+    def get_early_exit_stats(self):
+        ee_lh = self.transformer.encoder.pbe_lh.encoder.early_exit_samples
+        ee_rh = self.transformer.encoder.pbe_rh.encoder.early_exit_samples
+        ee_body = self.transformer.encoder.pbe_body.encoder.early_exit_samples
+        total = max(ee_lh, ee_rh, ee_body)  # tránh đếm trùng
+        return total, (ee_lh, ee_rh, ee_body)
+
+    def set_early_exit_stats(self):
+        self.transformer.encoder.pbe_lh.encoder.early_exit_samples =0
+        self.transformer.encoder.pbe_rh.encoder.early_exit_samples=0
+        self.transformer.encoder.pbe_body.encoder.early_exit_samples=0
 
     def forward(self, l_hand, r_hand, body, training):
         batch_size = l_hand.size(0)
