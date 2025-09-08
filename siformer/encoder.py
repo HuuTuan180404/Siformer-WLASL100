@@ -30,14 +30,110 @@ class EncoderLayer(nn.Module):
         return self.norm2(x+y)
 
 
-class PBEEncoder(nn.TransformerEncoder):
+# class PBEEncoder(nn.TransformerEncoder):
 
+#     __constants__ = ['norm']
+
+#     def __init__(self, encoder_layer, num_layers, norm=None, enable_nested_tensor=False,
+#                  patience=1, inner_classifiers_config=None, projections_config=None):
+#         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
+#         print(f'Using custom PBEEncoder: num_layers= {num_layers} | patience= {patience}', )
+#         self.patience = patience
+#         self.inner_classifiers = nn.ModuleList(
+#             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
+#              for _ in range(num_layers)]
+#         )
+#         self.projections = nn.ModuleList(
+#             [nn.Linear(projections_config[0], projections_config[1])
+#              for _ in range(num_layers)]
+#         )
+
+#         self.early_exit_samples = 0
+
+#     def forward(self, src: Tensor, mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
+#                 training: bool = True):
+#         output = src
+#         convert_to_nested = False
+#         first_layer = self.layers[0]
+#         if isinstance(first_layer, torch.nn.TransformerEncoderLayer):
+#             if (not first_layer.norm_first and not first_layer.training and
+#                     first_layer.self_attn.batch_first and
+#                     first_layer.self_attn._qkv_same_embed_dim and first_layer.activation_relu_or_gelu and
+#                     first_layer.norm1.eps == first_layer.norm2.eps and
+#                     src.dim() == 3 and self.enable_nested_tensor):
+#                 if src_key_padding_mask is not None and not output.is_nested and mask is None:
+#                     tensor_args = (
+#                         src,
+#                         first_layer.self_attn.in_proj_weight,
+#                         first_layer.self_attn.in_proj_bias,
+#                         first_layer.self_attn.out_proj.weight,
+#                         first_layer.self_attn.out_proj.bias,
+#                         first_layer.norm1.weight,
+#                         first_layer.norm1.bias,
+#                         first_layer.norm2.weight,
+#                         first_layer.norm2.bias,
+#                         first_layer.linear1.weight,
+#                         first_layer.linear1.bias,
+#                         first_layer.linear2.weight,
+#                         first_layer.linear2.bias,
+#                     )
+#                     if not torch.overrides.has_torch_function(tensor_args):
+#                         if not torch.is_grad_enabled() or all([not x.requires_grad for x in tensor_args]):
+#                             if output.is_cuda or 'cpu' in str(output.device):
+#                                 convert_to_nested = True
+#                                 output = torch._nested_tensor_from_mask(output, src_key_padding_mask.logical_not())
+#         if training or self.patience == 0:
+#             for i, mod in enumerate(self.layers):
+#                 if convert_to_nested:
+#                     output = mod(output, src_mask=mask)
+#                 else:
+#                     output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)  # [L, B, F/D]
+#                 # mod_output = output
+#                 # classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)  # [B, L, C]
+#                 # _ = self.projections[i](classifier_out.permute(0, 2, 1)).squeeze(-1)  # [1, 100]
+#         else:
+#             patient_counter = 0
+#             patient_result = None
+#             calculated_layer_num = 0
+#             for i, mod in enumerate(self.layers):
+#                 calculated_layer_num += 1
+#                 if convert_to_nested:
+#                     output = mod(output, src_mask=mask)
+#                 else:
+#                     output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+#                 mod_output = output
+#                 if self.norm is not None:
+#                     mod_output = self.norm(mod_output)  # [L, B, D/F]
+#                 classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)  # [B, L, C]
+#                 projection_out = self.projections[i](classifier_out.permute(0, 2, 1)).squeeze(-1)  # [1, 100]
+#                 labels = projection_out.detach().argmax(dim=1)  # [1]
+#                 if patient_result is not None:
+#                     patient_labels = patient_result.detach().argmax(dim=1)
+#                 if (patient_result is not None) and torch.all(labels.eq(patient_labels)):
+#                     patient_counter += 1
+#                 else:
+#                     patient_counter = 0
+#                 patient_result = projection_out
+#                 if patient_counter == self.patience:
+#                     break
+#             # print(f"calculated_enc_layer_num: {calculated_layer_num}")
+
+#         if convert_to_nested:
+#             output = output.to_padded_tensor(0.)
+
+#         if self.norm is not None:
+#             output = self.norm(output)
+
+#         return output
+
+
+class PBEEncoder(nn.TransformerEncoder):
     __constants__ = ['norm']
 
     def __init__(self, encoder_layer, num_layers, norm=None, enable_nested_tensor=False,
                  patience=1, inner_classifiers_config=None, projections_config=None):
         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
-        print(f'Using custom PBEEncoder: num_layers= {num_layers} | patience= {patience}', )
+        print(f'Using custom PBEEncoder: num_layers= {num_layers} | patience= {patience}')
         self.patience = patience
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
@@ -48,17 +144,22 @@ class PBEEncoder(nn.TransformerEncoder):
              for _ in range(num_layers)]
         )
 
-    def forward(self, src: Tensor, mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None,
+        # ✅ thêm biến lưu tổng số sample thoát sớm
+        self.early_exit_samples = 0
+
+    def forward(self, src: Tensor, mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
                 training: bool = True):
+
         output = src
         convert_to_nested = False
         first_layer = self.layers[0]
         if isinstance(first_layer, torch.nn.TransformerEncoderLayer):
             if (not first_layer.norm_first and not first_layer.training and
-                    first_layer.self_attn.batch_first and
-                    first_layer.self_attn._qkv_same_embed_dim and first_layer.activation_relu_or_gelu and
-                    first_layer.norm1.eps == first_layer.norm2.eps and
-                    src.dim() == 3 and self.enable_nested_tensor):
+                first_layer.self_attn.batch_first and
+                first_layer.self_attn._qkv_same_embed_dim and first_layer.activation_relu_or_gelu and
+                first_layer.norm1.eps == first_layer.norm2.eps and
+                src.dim() == 3 and self.enable_nested_tensor):
                 if src_key_padding_mask is not None and not output.is_nested and mask is None:
                     tensor_args = (
                         src,
@@ -80,41 +181,47 @@ class PBEEncoder(nn.TransformerEncoder):
                             if output.is_cuda or 'cpu' in str(output.device):
                                 convert_to_nested = True
                                 output = torch._nested_tensor_from_mask(output, src_key_padding_mask.logical_not())
+
         if training or self.patience == 0:
             for i, mod in enumerate(self.layers):
                 if convert_to_nested:
                     output = mod(output, src_mask=mask)
                 else:
-                    output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)  # [L, B, F/D]
-                # mod_output = output
-                # classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)  # [B, L, C]
-                # _ = self.projections[i](classifier_out.permute(0, 2, 1)).squeeze(-1)  # [1, 100]
+                    output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
         else:
-            patient_counter = 0
-            patient_result = None
-            calculated_layer_num = 0
+            batch_size = src.size(1)  # ✅ số sample trong batch
+            patient_counters = torch.zeros(batch_size, dtype=torch.long, device=src.device)
+            patient_results = None
+            exited = torch.zeros(batch_size, dtype=torch.bool, device=src.device)
+
             for i, mod in enumerate(self.layers):
-                calculated_layer_num += 1
                 if convert_to_nested:
                     output = mod(output, src_mask=mask)
                 else:
                     output = mod(output, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
-                mod_output = output
-                if self.norm is not None:
-                    mod_output = self.norm(mod_output)  # [L, B, D/F]
-                classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)  # [B, L, C]
-                projection_out = self.projections[i](classifier_out.permute(0, 2, 1)).squeeze(-1)  # [1, 100]
-                labels = projection_out.detach().argmax(dim=1)  # [1]
-                if patient_result is not None:
-                    patient_labels = patient_result.detach().argmax(dim=1)
-                if (patient_result is not None) and torch.all(labels.eq(patient_labels)):
-                    patient_counter += 1
-                else:
-                    patient_counter = 0
-                patient_result = projection_out
-                if patient_counter == self.patience:
+
+                mod_output = self.norm(output) if self.norm is not None else output
+                classifier_out = self.inner_classifiers[i](mod_output).squeeze().unsqueeze(0)
+                projection_out = self.projections[i](classifier_out.permute(0, 2, 1)).squeeze(-1)
+                labels = projection_out.detach().argmax(dim=1)  # [B]
+
+                if patient_results is not None:
+                    prev_labels = patient_results.detach().argmax(dim=1)
+                    same_mask = labels.eq(prev_labels)  # ✅ so sánh riêng từng sample
+                    patient_counters[same_mask] += 1
+                    patient_counters[~same_mask] = 0
+                patient_results = projection_out
+
+                # ✅ sample nào đạt patience thì đánh dấu đã exit
+                newly_exited = (~exited) & (patient_counters >= self.patience)
+                exited = exited | newly_exited
+
+                # ✅ cộng dồn số sample thoát sớm
+                self.early_exit_samples += newly_exited.sum().item()
+
+                # nếu tất cả sample đều exit thì dừng sớm
+                if exited.all():
                     break
-            # print(f"calculated_enc_layer_num: {calculated_layer_num}")
 
         if convert_to_nested:
             output = output.to_padded_tensor(0.)

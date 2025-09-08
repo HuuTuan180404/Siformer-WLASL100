@@ -45,7 +45,10 @@ class PerStreamPBE(nn.Module):
                 key_padding_mask: Optional[Tensor] = None,
                 training: bool = True) -> Tensor:
         # x: [L, B, D_stream]
-        return self.encoder(x, mask = mask, src_key_padding_mask = key_padding_mask, training = training)
+
+        result= self.encoder(x, mask = mask, src_key_padding_mask = key_padding_mask, training = training)
+        print(result.early_exit_samples)
+        return result
 
 
 class CommunicatingEncoderLayer(nn.Module):
