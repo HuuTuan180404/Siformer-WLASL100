@@ -97,7 +97,6 @@ def evaluate(model, dataloader, device, print_stats=False):
 
     _, (ee_lh, ee_rh, ee_body) = model.get_early_exit_stats()
 
-
     early_exit_total = min(total_samples, max(ee_lh, ee_rh, ee_body))
     print(f"VAL: Early exit: {early_exit_total}, Total: {total_samples} | ({early_exit_total/total_samples:.2%})")
 
@@ -110,6 +109,37 @@ def evaluate(model, dataloader, device, print_stats=False):
 
     return pred_correct, pred_all, (pred_correct / pred_all)
 
+
+def compute_early_exit_stats(model, dataloader, device):
+    early_exit_total = 0
+    total_samples = 0
+    model.set_early_exit_stats()
+
+    with torch.no_grad():
+        for i, data in enumerate(dataloader):
+            l_hands, r_hands, bodies, labels = data
+            l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+            r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+            bodies = bodies.to(device)  # [24, 204, 12, 2]
+            labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+            batch_size = l_hands.size(0)
+            total_samples += batch_size
+
+            for j in range(labels.size(0)):
+                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                label = labels[j]
+
+                output = model(l_hand, r_hand, body, training=False)
+                output = output.unsqueeze(0).expand(1, -1, -1)
+
+    total, (ee_lh, ee_rh, ee_body) = model.get_early_exit_stats()
+    early_exit_total += total
+    ratio = early_exit_total / total_samples if total_samples > 0 else 0
+
+    return early_exit_total, total_samples, ratio 
 
 def evaluate_top_k(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0
@@ -139,6 +169,35 @@ def evaluate_top_k(model, dataloader, device, k=5):
 
     return pred_correct, pred_all, (pred_correct / pred_all)
 
+
+# def compute_early_exit_stats(model, dataloader, device):
+#     model.eval()
+#     early_exit_total = 0
+#     total_samples = 0
+
+#     with torch.no_grad():
+#         for i, data in enumerate(dataloader):
+#             # i, data = i.to(device), data.to(device)
+#             l_hands, r_hands, bodies, labels = data
+#             l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+#             r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+#             bodies = bodies.to(device)  # [24, 204, 12, 2]
+#             labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+#             total_samples += labels.size(0)
+
+#             # forward với early-exit logic
+#             _ = model(l_hands, r_hands, bodies, training=False)
+
+#             # cộng dồn số sample thoát sớm từ encoder
+            
+#             total, (ee_lh, ee_rh, ee_body) = model.get_early_exit_stats()
+#             early_exit_total += total
+        
+#             model.set_early_exit_stats()
+
+#     ratio = early_exit_total / total_samples if total_samples > 0 else 0
+#     return early_exit_total, total_samples, ratio 
 
 def get_sequence_list(num):
     if num == 0:

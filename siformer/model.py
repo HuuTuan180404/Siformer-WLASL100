@@ -344,6 +344,7 @@ class SiFormer(nn.Module):
         self.transformer.encoder.pbe_rh.encoder.early_exit_samples=0
         self.transformer.encoder.pbe_body.encoder.early_exit_samples=0
 
+
     def forward(self, l_hand, r_hand, body, training):
         batch_size = l_hand.size(0)
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.model import SiFormer, SpoTer
-from siformer.utils import train_epoch, evaluate, evaluate_top_k
+from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats
 from siformer.gaussian_noise import GaussianNoise
 
 import time
@@ -325,6 +325,25 @@ def train(args):
                 print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
                 logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
 
+        path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
+        if os.path.exists(path_to_load):                    
+            print('Thống kê thoát sớm')
+    
+            model_top=torch.load(path_to_load, weights_only=False)
+            model_top.to(device)
+
+            if train_loader:
+                train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
+                print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
+            if val_loader:
+                val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
+                print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
+            
+            if eval_loader:
+                test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
+                print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
+
+
         print("\nThe top result was recorded at " + str(
             top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
         logging.info("\nThe top result was recorded at " + str(
@@ -383,6 +402,91 @@ def train(args):
 #     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
 #     args = parser.parse_args()
 #     train(args)
+
+def thong_ke_thoat_som(args, top_result_name):
+        # MARK: TRAINING PREPARATION AND MODULES
+
+    # Initialize all the random seeds
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    os.environ["PYTHONHASHSEED"] = str(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+
+    # Set device to CUDA only if applicable
+    device = torch.device("cpu")
+    if torch.cuda.is_available():
+        print("Cuda is available: True")
+        device = torch.device("cuda")
+
+    # Ensure that the path for checkpointing and for images both exist
+    Path("out-checkpoints/" + args.experiment_name + "/").mkdir(parents=True, exist_ok=True)
+    Path("out-img/").mkdir(parents=True, exist_ok=True)
+
+    # MARK: DATA
+
+    # Training set
+    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) #Áp dụng một phép biến đổi lên dữ liệu huấn luyện, cụ thể là thêm nhiễu Gaussian. Đây là một kỹ thuật tăng cường dữ liệu (data augmentation) để giúp mô hình tổng quát hóa tốt hơn.
+
+    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True) #Đây là một lớp tùy chỉnh để đọc dữ liệu từ các tệp được chỉ định trong args.training_set_path, args.validation_set_path, v.v.
+
+    # Validation set
+    if args.validation_set == "from-file":
+        val_set = CzechSLRDataset(args.validation_set_path)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                num_workers=args.num_worker)
+    elif args.validation_set == "split-from-train":
+        train_set, val_set = __balance_val_split(train_set, 0.2)
+
+        val_set.transform = None
+        val_set.augmentations = False
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                num_workers=args.num_worker)
+    else:
+        val_loader = None
+
+    # Testing set
+    if args.testing_set_path:        
+        eval_set = CzechSLRDataset(args.testing_set_path)
+        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                 num_workers=args.num_worker)
+    else:
+        eval_loader = None
+    
+    # Final training set refinements
+    if args.experimental_train_split:
+        train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
+
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                              num_workers=args.num_worker)
+
+    path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
+    if os.path.exists(path_to_load):                    
+        print('Thống kê thoát sớm')
+    
+        model_top=torch.load(path_to_load, weights_only=False)
+        model_top.to(device)        
+
+        if train_loader:
+            train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
+            print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
+        if val_loader:
+            val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
+            print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
+            
+        if eval_loader:
+            _, _, eval_acc = evaluate(model_top, eval_loader, device, print_stats=True)
+            print(top_result_name + "  ->  " + str(eval_acc))
+
+            test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
+            print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
+    else:
+        print('Model top not exists')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
 
@@ -401,4 +505,5 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-    train(args)
+    thong_ke_thoat_som(args, 'checkpoint_t_8')
+    # train(args)
