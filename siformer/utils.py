@@ -89,6 +89,12 @@ def evaluate(model, dataloader, device, print_stats=False):
 
 def compute_early_exit_stats(model, dataloader, device):
     early_exit_total = 0
+    _1_stream=0
+    _2_stream=0
+    _3_stream=0
+    full_deepth=0
+
+    lh_stream, rh_stream, b_stream=0, 0, 0
     total_samples = 0
 
     with torch.no_grad():
@@ -102,6 +108,7 @@ def compute_early_exit_stats(model, dataloader, device):
             total_samples += batch_size
 
             for j in range(batch_size):
+                sample=0
                 model.set_early_exit_stats()
                 l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
                 r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
@@ -110,10 +117,42 @@ def compute_early_exit_stats(model, dataloader, device):
 
                 _ = model(l_hand, r_hand, body, training=False)
 
-                early_exit_total+= 1 if model.get_early_exit_stats() == True else 0
+                sum, (el, er, eb) = model.get_early_exit_stats()
+                if el:
+                    sample+=1
+                    lh_stream+=1
+                if er:
+                    rh_stream+=1
+                    sample+=1
+                if eb:
+                    b_stream+=1
+                    sample+=1
+                
+                if sample==1:
+                    _1_stream+=1
+                if sample==2:
+                    _2_stream+=1
+                if sample==3:
+                    _3_stream+=1
+                
+                if sample==0:
+                    full_deepth+=1
+
+                early_exit_total+= 1 if sum == True else 0
     
     ratio = early_exit_total / total_samples if total_samples > 0 else 0
+
+    print(f'1 stream {_1_stream}')
+    print(f'2 stream {_2_stream}')
+    print(f'3 stream {_3_stream}')
+    print(f'full deepth {full_deepth}')
+
+    print(f'lh_stream {lh_stream}')
+    print(f'rh_stream {rh_stream}')
+    print(f'b_stream {b_stream}')
+
     return early_exit_total, total_samples, ratio
+
 
 def evaluate_top_k(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0

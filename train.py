@@ -404,6 +404,74 @@ def train(args):
     logging.info("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
+# def thong_ke_thoat_som(args, top_result_name):
+#     path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
+#     if not os.path.exists(path_to_load):
+#         return
+
+#     random.seed(args.seed)
+#     np.random.seed(args.seed)
+#     os.environ["PYTHONHASHSEED"] = str(args.seed)
+#     torch.manual_seed(args.seed)
+#     torch.cuda.manual_seed(args.seed)
+#     torch.cuda.manual_seed_all(args.seed)
+#     torch.backends.cudnn.deterministic = True
+#     g = torch.Generator()
+#     g.manual_seed(args.seed)
+
+#     device = torch.device("cpu")
+#     if torch.cuda.is_available():
+#         print("Cuda is available: True")
+#         device = torch.device("cuda")
+
+#     model_top = torch.load(path_to_load, weights_only=False)
+#     model_top.to(device)
+#     model_top.eval()
+
+#     transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) #Áp dụng một phép biến đổi lên dữ liệu huấn luyện, cụ thể là thêm nhiễu Gaussian. Đây là một kỹ thuật tăng cường dữ liệu (data augmentation) để giúp mô hình tổng quát hóa tốt hơn.
+
+#     train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True) #Đây là một lớp tùy chỉnh để đọc dữ liệu từ các tệp được chỉ định trong args.training_set_path, args.validation_set_path, v.v.
+
+#     if args.testing_set_path:
+#         eval_set = CzechSLRDataset(args.testing_set_path)
+#         eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, generator=g,
+#                                  num_workers=args.num_worker)
+        
+#         model_top.set_early_exit_stats()
+#         test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
+#         print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
+#     else:
+#         eval_loader = None
+
+#     train_set = CzechSLRDataset(args.training_set_path)
+
+#     if args.validation_set == "from-file":
+#         val_set = CzechSLRDataset(args.validation_set_path)
+#         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
+#                                 num_workers=args.num_worker)
+#     elif args.validation_set == "split-from-train":
+#         train_set, val_set = __balance_val_split(train_set, 0.2)
+#         val_set.transform = None
+#         val_set.augmentations = False
+#         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, generator=g,
+#                                 num_workers=args.num_worker)
+#         train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=False, generator=g,
+#                               num_workers=args.num_worker)
+#     else:
+#         val_loader = None
+
+#     if train_loader:
+#         model_top.set_early_exit_stats()
+#         train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
+#         print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
+#     if val_loader:
+#         model_top.set_early_exit_stats()
+#         val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
+#         print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
+#     else:
+#         print('Model top not exists')
+
+
 def thong_ke_thoat_som(args, top_result_name):
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -461,14 +529,11 @@ def thong_ke_thoat_som(args, top_result_name):
             val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
             print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
         if eval_loader:
-            # _, _, eval_acc = evaluate(model_top, eval_loader, device, print_stats=False)
-            # print(top_result_name + "  ->  " + str(eval_acc))
             model_top.set_early_exit_stats()
             test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
             print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
     else:
         print('Model top not exists')
-
 
 # def tinh_tham_so(args, top_result_name):
 def tinh_tham_so(model):
@@ -481,7 +546,6 @@ def tinh_tham_so(model):
         print(f"🔹 Total params: {total_params:,}")
         print(f"🔹 Trainable params: {trainable_params:,}")
         print(f"🔹 Frozen params: {frozen_params:,}")
-
 
 flops_dict = {}
 
@@ -517,45 +581,10 @@ def add_hooks(module, name):
 
     module.register_forward_hook(hook)
 
-# --- Gắn hook cho toàn bộ model ---
 def register_hooks(model):
     for name, module in model.named_modules():
         if isinstance(module, (nn.Linear, nn.MultiheadAttention, nn.Conv1d)):
             add_hooks(module, name)
-
-
-def compute_flops(model, dataloader, device, mode: bool = False):
-    if model is not None:
-        model.to(device)
-
-        register_hooks(model)
-
-        total_flops, total_samples = 0, 0
-
-        if dataloader is not None:
-            with torch.no_grad():
-                for i, data in enumerate(dataloader):
-                    l_hands, r_hands, bodies, labels = data
-                    l_hands = l_hands.to(device)  # [24, 204, 21, 2]
-                    r_hands = r_hands.to(device)  # [24, 204, 21, 2]
-                    bodies = bodies.to(device)  # [24, 204, 12, 2]
-                    labels = labels.to(device, dtype=torch.long)  # [24, 1]
-
-                    total_samples += labels.size(0)
-
-                    for j in range(labels.size(0)):
-                        global flops_dict
-                        flops_dict = {}
-                        l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                        r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                        body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
-                        label = labels[j]
-                        out = model(l_hand, r_hand, body, training=mode)
-
-            total_flops = sum(flops_dict.values())
-            print(f"[{mode}] Total FLOPs = {total_flops:,}")
-        else:
-            print(f'Bỏ qua FLOPs')
 
 def compute_flop(model, dataloader, device, mode: bool = False):
     if model is not None:
@@ -593,6 +622,40 @@ def compute_flop(model, dataloader, device, mode: bool = False):
             print(f"[{mode}] Avg FLOPs per sample = {avg_flops:,.0f}")
 
             # print(f"[{mode}] Total FLOPs = {total_flops:,}")
+        else:
+            print(f'Bỏ qua FLOPs')
+
+
+def compute_flops(model, dataloader, device, mode: bool = False):
+    if model is not None:
+        model.to(device)
+
+        register_hooks(model)
+
+        total_flops, total_samples = 0, 0
+
+        if dataloader is not None:
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    l_hands, r_hands, bodies, labels = data
+                    l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+                    r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+                    bodies = bodies.to(device)  # [24, 204, 12, 2]
+                    labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+                    total_samples += labels.size(0)
+
+                    for j in range(labels.size(0)):
+                        global flops_dict
+                        flops_dict = {}
+                        l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                        label = labels[j]
+                        out = model(l_hand, r_hand, body, training=mode)
+
+            total_flops = sum(flops_dict.values())
+            print(f"[{mode}] Total FLOPs = {total_flops:,}")
         else:
             print(f'Bỏ qua FLOPs')
 
