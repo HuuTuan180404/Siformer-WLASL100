@@ -336,7 +336,7 @@ class SiFormer(nn.Module):
         ee_lh = self.transformer.encoder.pbe_lh.encoder.is_exit_early
         ee_rh = self.transformer.encoder.pbe_rh.encoder.is_exit_early
         ee_body = self.transformer.encoder.pbe_body.encoder.is_exit_early
-        return ee_lh or ee_rh or ee_body
+        return ee_lh or ee_rh or ee_body, (ee_lh, ee_rh, ee_body)
 
     def set_early_exit_stats(self):
         self.transformer.encoder.pbe_lh.encoder.is_exit_early = False
