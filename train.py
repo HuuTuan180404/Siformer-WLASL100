@@ -4,9 +4,13 @@ import random
 import logging
 import torch
 
+from thop import profile
+from tqdm import tqdm
+
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
+from torchsummaryX import summary
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from torchvision import transforms
@@ -22,6 +26,8 @@ from siformer.gaussian_noise import GaussianNoise
 import time
 import datetime
 from statistics import mean
+
+
 
 
 def get_default_args():
@@ -398,15 +404,7 @@ def train(args):
     logging.info("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
-#     args = parser.parse_args()
-#     train(args)
-
 def thong_ke_thoat_som(args, top_result_name):
-        # MARK: TRAINING PREPARATION AND MODULES
-
-    # Initialize all the random seeds
     random.seed(args.seed)
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
@@ -417,31 +415,20 @@ def thong_ke_thoat_som(args, top_result_name):
     g = torch.Generator()
     g.manual_seed(args.seed)
 
-    # Set device to CUDA only if applicable
     device = torch.device("cpu")
     if torch.cuda.is_available():
         print("Cuda is available: True")
         device = torch.device("cuda")
 
-    # Ensure that the path for checkpointing and for images both exist
-    Path("out-checkpoints/" + args.experiment_name + "/").mkdir(parents=True, exist_ok=True)
-    Path("out-img/").mkdir(parents=True, exist_ok=True)
+    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)])
+    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
 
-    # MARK: DATA
-
-    # Training set
-    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) #Áp dụng một phép biến đổi lên dữ liệu huấn luyện, cụ thể là thêm nhiễu Gaussian. Đây là một kỹ thuật tăng cường dữ liệu (data augmentation) để giúp mô hình tổng quát hóa tốt hơn.
-
-    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True) #Đây là một lớp tùy chỉnh để đọc dữ liệu từ các tệp được chỉ định trong args.training_set_path, args.validation_set_path, v.v.
-
-    # Validation set
     if args.validation_set == "from-file":
         val_set = CzechSLRDataset(args.validation_set_path)
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                 num_workers=args.num_worker)
     elif args.validation_set == "split-from-train":
         train_set, val_set = __balance_val_split(train_set, 0.2)
-
         val_set.transform = None
         val_set.augmentations = False
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
@@ -449,43 +436,211 @@ def thong_ke_thoat_som(args, top_result_name):
     else:
         val_loader = None
 
-    # Testing set
-    if args.testing_set_path:        
+    if args.testing_set_path:
         eval_set = CzechSLRDataset(args.testing_set_path)
         eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                  num_workers=args.num_worker)
     else:
         eval_loader = None
-    
-    # Final training set refinements
     if args.experimental_train_split:
         train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
-
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
                               num_workers=args.num_worker)
-
     path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
-    if os.path.exists(path_to_load):                    
+    if os.path.exists(path_to_load):
         print('Thống kê thoát sớm')
-    
-        model_top=torch.load(path_to_load, weights_only=False)
-        model_top.to(device)        
-
+        model_top = torch.load(path_to_load, weights_only=False)
+        model_top.to(device)
+        model_top.eval()
         if train_loader:
+            model_top.set_early_exit_stats()
             train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
             print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
         if val_loader:
+            model_top.set_early_exit_stats()
             val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
             print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
-            
         if eval_loader:
-            _, _, eval_acc = evaluate(model_top, eval_loader, device, print_stats=True)
-            print(top_result_name + "  ->  " + str(eval_acc))
-
+            # _, _, eval_acc = evaluate(model_top, eval_loader, device, print_stats=False)
+            # print(top_result_name + "  ->  " + str(eval_acc))
+            model_top.set_early_exit_stats()
             test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
             print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
     else:
         print('Model top not exists')
+
+
+# def tinh_tham_so(args, top_result_name):
+def tinh_tham_so(model):
+
+    if model is not None:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
+
+        print(f"🔹 Total params: {total_params:,}")
+        print(f"🔹 Trainable params: {trainable_params:,}")
+        print(f"🔹 Frozen params: {frozen_params:,}")
+
+
+flops_dict = {}
+
+def add_hooks(module, name):
+    def hook(module, input, output):
+        # Tùy module mà tính FLOPs khác nhau
+        if isinstance(module, nn.Linear):
+            # FLOPs ≈ 2 * in_features * out_features
+            flops = 2 * module.in_features * module.out_features
+            flops_dict[name] = flops_dict.get(name, 0) + flops
+
+        elif isinstance(module, nn.MultiheadAttention):
+            if len(input) > 0:
+                query = input[0]
+                # Nếu query lại là tuple thì lấy phần tử đầu
+                if isinstance(query, (tuple, list)):
+                    query = query[0]
+                if isinstance(query, torch.Tensor) and query.dim() == 3:
+                    seq_len, batch_size, embed_dim = query.shape
+                    # Tính FLOPs: QKV + Attention + Output projection
+                    flops_qkv = 3 * 2 * batch_size * seq_len * embed_dim * embed_dim
+                    flops_attn = 2 * batch_size * (seq_len ** 2) * embed_dim
+                    flops_out = 2 * batch_size * seq_len * embed_dim * embed_dim
+                    flops = flops_qkv + flops_attn + flops_out
+                    flops_dict[name] = flops_dict.get(name, 0) + flops
+
+        elif isinstance(module, nn.Conv1d):
+            # FLOPs cho Conv1d
+            out_len = output.shape[-1]
+            flops = (module.in_channels * module.out_channels *
+                     module.kernel_size[0] * out_len)
+            flops_dict[name] = flops_dict.get(name, 0) + flops
+
+    module.register_forward_hook(hook)
+
+# --- Gắn hook cho toàn bộ model ---
+def register_hooks(model):
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Linear, nn.MultiheadAttention, nn.Conv1d)):
+            add_hooks(module, name)
+
+
+def compute_flops(model, dataloader, device, mode: bool = False):
+    if model is not None:
+        model.to(device)
+
+        register_hooks(model)
+
+        total_flops, total_samples = 0, 0
+
+        if dataloader is not None:
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    l_hands, r_hands, bodies, labels = data
+                    l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+                    r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+                    bodies = bodies.to(device)  # [24, 204, 12, 2]
+                    labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+                    total_samples += labels.size(0)
+
+                    for j in range(labels.size(0)):
+                        global flops_dict
+                        flops_dict = {}
+                        l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                        label = labels[j]
+                        out = model(l_hand, r_hand, body, training=mode)
+
+            total_flops = sum(flops_dict.values())
+            print(f"[{mode}] Total FLOPs = {total_flops:,}")
+        else:
+            print(f'Bỏ qua FLOPs')
+
+def compute_flop(model, dataloader, device, mode: bool = False):
+    if model is not None:
+        model.to(device)
+
+        register_hooks(model)
+
+        total_flops, total_samples = 0, 0
+
+        if dataloader is not None:
+            with torch.no_grad():
+                for i, data in enumerate(dataloader):
+                    l_hands, r_hands, bodies, labels = data
+                    l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+                    r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+                    bodies = bodies.to(device)  # [24, 204, 12, 2]
+                    labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+                    total_samples += labels.size(0)
+
+                    for j in range(labels.size(0)):
+                        global flops_dict
+                        flops_dict = {}
+                        l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                        body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                        label = labels[j]
+                        out = model(l_hand, r_hand, body, training=mode)
+
+                        total_flops += sum(flops_dict.values())
+            
+            avg_flops = total_flops / total_samples if total_samples > 0 else 0
+            print(f"[{mode}] Samples={total_samples:,}")
+            print(f"[{mode}] Total FLOPs (dataset) = {total_flops:,}")
+            print(f"[{mode}] Avg FLOPs per sample = {avg_flops:,.0f}")
+
+            # print(f"[{mode}] Total FLOPs = {total_flops:,}")
+        else:
+            print(f'Bỏ qua FLOPs')
+
+def load_checkpoint_dataloader_device(args, top_result_name):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    os.environ["PYTHONHASHSEED"] = str(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+
+    path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
+    if os.path.exists(path_to_load):
+        model = torch.load(path_to_load, weights_only=False)
+    else: 
+        model= None
+
+    if args.testing_set_path:
+        eval_set = CzechSLRDataset(args.testing_set_path)
+        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                    num_workers=args.num_worker)
+    else:
+        eval_loader = None
+
+    device = torch.device("cpu")
+    if torch.cuda.is_available():
+        print("Cuda is available: True")
+        device = torch.device("cuda")
+    
+    return model, eval_loader, device
+
+def thong_ke(args, top_result_name):
+    model, dataloader, device = load_checkpoint_dataloader_device(args, top_result_name)
+
+    print(f'=====EXIT EARLY=====')
+    thong_ke_thoat_som(args, 'checkpoint_t_8')
+
+    print(f'=====PARAM=====')
+    tinh_tham_so(model)
+
+    print(f'=====FLOPs=====')
+    compute_flop(model, dataloader, device, False)
+    compute_flop(model, dataloader, device, True)
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
@@ -505,5 +660,7 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
+    # thong_ke(args, 'checkpoint_t_8')
     thong_ke_thoat_som(args, 'checkpoint_t_8')
+
     # train(args)

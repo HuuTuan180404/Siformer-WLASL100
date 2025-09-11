@@ -212,7 +212,7 @@ class CombinedEncoder(nn.Module):
         # 1) PBE per-stream
         l_hand_x = self.pbe_lh(l_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
         r_hand_x = self.pbe_rh(r_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-        body_x   = self.pbe_body(body_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)        
+        body_x   = self.pbe_body(body_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)    
 
         # Norm cuối
         feats[0] = self.norm_lh(feats[0])
@@ -333,17 +333,15 @@ class SiFormer(nn.Module):
         self.projection = nn.Linear(num_hid, num_classes)
 
     def get_early_exit_stats(self):
-        ee_lh = self.transformer.encoder.pbe_lh.encoder.early_exit_samples
-        ee_rh = self.transformer.encoder.pbe_rh.encoder.early_exit_samples
-        ee_body = self.transformer.encoder.pbe_body.encoder.early_exit_samples
-        total = max(ee_lh, ee_rh, ee_body)  # tránh đếm trùng
-        return total, (ee_lh, ee_rh, ee_body)
+        ee_lh = self.transformer.encoder.pbe_lh.encoder.is_exit_early
+        ee_rh = self.transformer.encoder.pbe_rh.encoder.is_exit_early
+        ee_body = self.transformer.encoder.pbe_body.encoder.is_exit_early
+        return ee_lh or ee_rh or ee_body, (ee_lh, ee_rh, ee_body)
 
     def set_early_exit_stats(self):
-        self.transformer.encoder.pbe_lh.encoder.early_exit_samples =0
-        self.transformer.encoder.pbe_rh.encoder.early_exit_samples=0
-        self.transformer.encoder.pbe_body.encoder.early_exit_samples=0
-
+        self.transformer.encoder.pbe_lh.encoder.is_exit_early = False
+        self.transformer.encoder.pbe_rh.encoder.is_exit_early = False
+        self.transformer.encoder.pbe_body.encoder.is_exit_early = False
 
     def forward(self, l_hand, r_hand, body, training):
         batch_size = l_hand.size(0)
