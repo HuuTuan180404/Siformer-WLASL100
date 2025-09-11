@@ -134,8 +134,8 @@ def train(args):
     else:
         slr_model = SpoTer(num_classes=args.num_classes, num_hid=args.num_seq_elements,
                            num_enc_layers=args.num_enc_layers, num_dec_layers=args.num_dec_layers)
-    slr_model.train(True) # Đây là hàm mất mát (loss function). Nó đo lường sự khác biệt giữa dự đoán của mô hình và nhãn thực tế, và mô hình sẽ cố gắng giảm thiểu giá trị này.
-    slr_model.to(device) # Di chuyển mô hình đến thiết bị đã chọn (CPU hoặc GPU).
+    slr_model.train(True)
+    slr_model.to(device) 
 
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
     cel_criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
