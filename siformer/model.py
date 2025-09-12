@@ -348,7 +348,7 @@ class SiFormer(nn.Module):
 
         # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
         # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1) # [B, L, 21, 2] -> reshape thành [B, L, 42]
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1)
         new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1)
         body = body.view(body.size(0), body.size(1), -1)
         

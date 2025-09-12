@@ -48,45 +48,6 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
     return running_loss, pred_correct, pred_all, (pred_correct / pred_all), avg_train_time
 
 
-def evaluate(model, dataloader, device, print_stats=False):
-    pred_correct, pred_all = 0, 0
-    stats = {i: [0, 0] for i in range(100)}
-
-    with torch.no_grad():
-        for i, data in enumerate(dataloader):
-            l_hands, r_hands, bodies, labels = data
-            l_hands = l_hands.to(device)  # [24, 204, 21, 2]
-            r_hands = r_hands.to(device)  # [24, 204, 21, 2]
-            bodies = bodies.to(device)  # [24, 204, 12, 2]
-            labels = labels.to(device, dtype=torch.long)  # [24, 1]
-
-            for j in range(labels.size(0)):
-                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
-                label = labels[j]
-
-                output = model(l_hand, r_hand, body, training=False)
-                output = output.unsqueeze(0).expand(1, -1, -1)
-
-                # Statistics
-                if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(label):
-                    stats[int(labels[0][0])][0] += 1
-                    pred_correct += 1
-
-                stats[int(labels[0][0])][1] += 1
-                pred_all += 1
-
-    if print_stats:
-        stats = {key: value[0] / value[1] for key, value in stats.items() if value[1] != 0}
-        print("Label accuracies statistics:")
-        print(str(stats) + "\n")
-        logging.info("Label accuracies statistics:")
-        logging.info(str(stats) + "\n")
-
-    return pred_correct, pred_all, (pred_correct / pred_all)
-
-
 def compute_early_exit_stats(model, dataloader, device):
     early_exit_total = 0
     _1_stream=0
@@ -153,6 +114,43 @@ def compute_early_exit_stats(model, dataloader, device):
     return early_exit_total, total_samples, ratio
 
 
+def evaluate(model, dataloader, device):
+    pred_correct, pred_all = 0, 0
+    stats = {i: [0, 0] for i in range(100)}
+
+    with torch.no_grad():
+        for i, data in enumerate(dataloader):
+            l_hands, r_hands, bodies, labels = data
+            l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+            r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+            bodies = bodies.to(device)  # [24, 204, 12, 2]
+            labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+            for j in range(labels.size(0)):
+                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                label = labels[j]
+
+                output = model(l_hand, r_hand, body, training=False)
+                output = output.unsqueeze(0).expand(1, -1, -1)
+
+                # Statistics
+                if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(label):
+                    stats[int(label)][0] += 1
+                    pred_correct += 1
+
+
+                stats[int(label)][1] += 1
+                pred_all += 1
+
+    acc_per_class=0
+    for k, v in stats.items():
+        acc_per_class += v[0]/v[1]
+
+    return pred_correct, pred_all, (pred_correct / pred_all)
+
+
 def evaluate_top_k(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0
 
@@ -173,13 +171,28 @@ def evaluate_top_k(model, dataloader, device, k=5):
                 output = model(l_hand, r_hand, body, training=False)
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
+                topK= torch.topk(output, k).indices.flatten().tolist()
+
+                _ = label[0]
+
                 # Statistics
-                if int(label[0]) in torch.topk(output, k).indices.tolist():
+                if int(label[0]) in topK:
                     pred_correct += 1
 
                 pred_all += 1
 
     return pred_correct, pred_all, (pred_correct / pred_all)
+
+
+def calc_total_params(model = None):
+    if model is not None:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
+
+        print(f"🔹 Total params: {total_params:,}")
+        print(f"🔹 Trainable params: {trainable_params:,}")
+        print(f"🔹 Frozen params: {frozen_params:,}")
 
 
 def get_sequence_list(num):

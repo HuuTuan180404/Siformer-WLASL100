@@ -288,15 +288,15 @@ def train(args):
         logging.info(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
         logging.info(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
 
-    # MARK: TESTING
-    print("\nTesting checkpointed models starting...\n")
-    logging.info("\nTesting checkpointed models starting...\n")
-
-    top_result, top_result_name = 0, ""
+    top_result_top1, top_result_name_top1 = 0, ""
+    top_result_topk, top_result_name_topk = 0, ""
     test_accs_t=[]
     test_accs_v=[]
 
     if eval_loader:
+        # MARK: TESTING
+        print("\nTesting checkpointed models starting...\n")
+        logging.info("\nTesting checkpointed models starting...\n")
         for i in range(11):            
             for checkpoint_id in ["t", "v"]:
                 path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
@@ -305,30 +305,46 @@ def train(args):
                     continue               
 
                 tested_model = torch.load(path_to_load, weights_only=False)
+                tested_model.eval()
 
-                tested_model.train(False)
-                _, _, eval_acc = evaluate(tested_model, eval_loader, device, print_stats=True)
+                # === Top 1 ===
+                _, _, eval_acc_top1 = evaluate(tested_model, eval_loader, device)
 
                 if checkpoint_id == "v":
-                    test_accs_v.append(eval_acc)
+                    test_accs_v.append(eval_acc_top1)
                 else:
-                    test_accs_t.append(eval_acc)
+                    test_accs_t.append(eval_acc_top1)
 
-                _, _, top_val_acc = evaluate_top_k(slr_model, val_loader, device)
+                if eval_acc_top1 > top_result_top1:
+                    top_result_top1 = eval_acc_top1
+                    top_result_name_top1 = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-                if eval_acc > top_result:
-                    top_result = eval_acc
-                    top_result_name = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
+                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_top1))
+                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_top1))
+                
+                # === Top K ===
+                _, _, eval_acc_topk = eval_acc_topk(tested_model, eval_loader, device)
 
-                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc))
+                if eval_acc_topk > top_result_topk:
+                    top_result_topk = eval_acc_topk
+                    top_result_name_topk = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-        path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
-        if os.path.exists(path_to_load):                    
-            print('Thống kê thoát sớm')
-    
+                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_topk))
+                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_topk))
+
+        path_to_load = "out-checkpoints/" + top_result_name_top1
+        if os.path.exists(path_to_load):
             model_top=torch.load(path_to_load, weights_only=False)
+
+            print('\n=== Parameter statistics ===')
+            logging.info('\n=== Parameter statistics ===')
+            calc_total_params(model)
+
             model_top.to(device)
+            model_top.eval()
+
+            print('\n=== Number of early exits ===')
+            logging.info('\n=== Number of early exits ===')
 
             if train_loader:
                 train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
@@ -336,18 +352,20 @@ def train(args):
             if val_loader:
                 val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
                 print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
-            
+
             if eval_loader:
                 test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
                 print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
 
+        print("\nThe top result was recorded at " + str(
+            top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
+        logging.info("\nThe top result was recorded at " + str(
+            top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
 
         print("\nThe top result was recorded at " + str(
-            top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
+            top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
         logging.info("\nThe top result was recorded at " + str(
-            top_result) + " testing accuracy. The best checkpoint is " + top_result_name + ".")
-    else:
-        print('khong test')
+            top_result_topk) + " testing accuracy. The best checkpoint is " + top_result_name_topk + ".")
 
     # PLOT 0: Performance (loss, accuracies) chart plotting
     if args.plot_stats:
@@ -395,226 +413,6 @@ def train(args):
     print("\nAny desired statistics have been plotted.\nThe experiment is finished.")
     logging.info("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
-def track_early_exiting(args, top_result_name):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    os.environ["PYTHONHASHSEED"] = str(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    g = torch.Generator()
-    g.manual_seed(args.seed)
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available():
-        print("Cuda is available: True")
-        device = torch.device("cuda")
-
-    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)])
-    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
-
-    if args.validation_set == "from-file":
-        val_set = CzechSLRDataset(args.validation_set_path)
-        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                num_workers=args.num_worker)
-    elif args.validation_set == "split-from-train":
-        train_set, val_set = __balance_val_split(train_set, 0.2)
-        val_set.transform = None
-        val_set.augmentations = False
-        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                num_workers=args.num_worker)
-    else:
-        val_loader = None
-
-    if args.testing_set_path:
-        eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                 num_workers=args.num_worker)
-    else:
-        eval_loader = None
-    if args.experimental_train_split:
-        train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                              num_workers=args.num_worker)
-    path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
-    if os.path.exists(path_to_load):
-        model_top = torch.load(path_to_load, weights_only=False)
-        model_top.to(device)
-        model_top.eval()
-        if train_loader:
-            model_top.set_early_exit_stats()
-            train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
-            print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
-        if val_loader:
-            model_top.set_early_exit_stats()
-            val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
-            print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
-        if eval_loader:
-            model_top.set_early_exit_stats()
-            test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
-            print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
-    else:
-        print('Model top not exists')
-
-
-def calc_total_params(model = None):
-    if model is not None:
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        frozen_params = total_params - trainable_params
-
-        print(f"🔹 Total params: {total_params:,}")
-        print(f"🔹 Trainable params: {trainable_params:,}")
-        print(f"🔹 Frozen params: {frozen_params:,}")
-
-def load_checkpoint_dataloader_device(args, top_result_name):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    os.environ["PYTHONHASHSEED"] = str(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    g = torch.Generator()
-    g.manual_seed(args.seed)
-
-    path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
-    if os.path.exists(path_to_load):
-        model = torch.load(path_to_load, weights_only=False)
-    else: 
-        model= None
-
-    if args.testing_set_path:
-        eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                    num_workers=args.num_worker)
-    else:
-        eval_loader = None
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available():
-        print("Cuda is available: True")
-        device = torch.device("cuda")
-    
-    return model, eval_loader, device
-
-def aggregate_model_stats(args, top_result_name):
-    model, dataloader, device = load_checkpoint_dataloader_device(args, top_result_name)
-
-    print(f'=====EXIT EARLY=====')
-    track_early_exiting(args, 'checkpoint_t_8')
-
-    print(f'=====PARAM=====')
-    calc_total_params(model)
-
-
-def test(args, top_result_name):
-    path_to_load = "out-checkpoints/" + args.experiment_name + "/" + top_result_name + ".pth"
-    if not os.path.exists(path_to_load):
-        return
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    os.environ["PYTHONHASHSEED"] = str(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    g = torch.Generator()
-    g.manual_seed(args.seed)
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available():
-        print("Cuda is available: True")
-        device = torch.device("cuda")
-
-    model = torch.load(path_to_load, weights_only=False)
-    
-
-    eval_loader = None
-    if args.testing_set_path:
-        eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                    num_workers=args.num_worker)
-
-    if model and eval_loader:
-        model.to(device)
-        model.eval()
-
-        pred_correct_top1, pred_all_top1, ratio_top1 = danh_gia_top_1(model, eval_loader, device)
-        print('=== TOP 1 ===')
-        print(f'{pred_correct_top1}/{pred_all_top1} = {ratio_top1}')
-
-        pred_correct_top5, pred_all_top5, ratio_top5= danh_gia_top_k(model, eval_loader, device)
-        print('=== TOP 5 ===')
-        print(f'{pred_correct_top5}/{pred_all_top5} = {ratio_top5}')
-
-
-def danh_gia_top_1(model, dataloader, device):
-    pred_correct, pred_all = 0, 0
-    stats = {i: [0, 0] for i in range(100)}
-
-    with torch.no_grad():
-        for i, data in enumerate(dataloader):
-            l_hands, r_hands, bodies, labels = data
-            l_hands = l_hands.to(device)  # [24, 204, 21, 2]
-            r_hands = r_hands.to(device)  # [24, 204, 21, 2]
-            bodies = bodies.to(device)  # [24, 204, 12, 2]
-            labels = labels.to(device, dtype=torch.long)  # [24, 1]
-
-            for j in range(labels.size(0)):
-                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
-                label = labels[j]
-
-                output = model(l_hand, r_hand, body, training=False)
-                output = output.unsqueeze(0).expand(1, -1, -1)
-
-                # Statistics
-                if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(label):
-                    stats[int(labels[0][0])][0] += 1
-                    pred_correct += 1
-
-                stats[int(labels[0][0])][1] += 1
-                pred_all += 1
-
-    return pred_correct, pred_all, (pred_correct / pred_all)
-
-
-def danh_gia_top_k(model, dataloader, device, k=5):
-    pred_correct, pred_all = 0, 0
-
-    with torch.no_grad():
-        for i, data in enumerate(dataloader):
-            l_hands, r_hands, bodies, labels = data
-            l_hands = l_hands.to(device)
-            r_hands = r_hands.to(device)
-            bodies = bodies.to(device)
-            labels = labels.to(device, dtype=torch.long)
-
-            for j in range(labels.size(0)):
-                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
-                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
-                label = labels[j]
-
-                output = model(l_hand, r_hand, body, training=False)
-                output = output.unsqueeze(0).expand(1, -1, -1)
-
-                topK= torch.topk(output, k).indices.flatten().tolist()
-
-                _ = label[0]
-
-                # Statistics
-                if int(label[0]) in topK:
-                    pred_correct += 1
-
-                pred_all += 1
-
-    return pred_correct, pred_all, (pred_correct / pred_all)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
@@ -634,6 +432,4 @@ if __name__ == '__main__':
     )
 
     args = parser.parse_args()
-    # train(args)
-
-    test(args, 'checkpoint_t_8')
+    train(args)
