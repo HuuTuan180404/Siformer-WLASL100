@@ -18,7 +18,7 @@ from pathlib import Path
 from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.model import SiFormer, SpoTer
-from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats
+from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params
 from siformer.gaussian_noise import GaussianNoise
 
 import time
