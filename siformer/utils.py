@@ -130,26 +130,25 @@ def compute_early_exit_stats(model, dataloader, device):
                 
                 if sample==1:
                     _1_stream+=1
-                if sample==2:
+                elif sample==2:
                     _2_stream+=1
-                if sample==3:
+                elif sample==3:
                     _3_stream+=1
-                
-                if sample==0:
+                else:
                     full_deepth+=1
 
                 early_exit_total+= 1 if sum == True else 0
     
     ratio = early_exit_total / total_samples if total_samples > 0 else 0
 
-    print(f'1 stream {_1_stream}')
-    print(f'2 stream {_2_stream}')
-    print(f'3 stream {_3_stream}')
-    print(f'full deepth {full_deepth}')
+    print(f'Exit in 1 stream {_1_stream}')
+    print(f'Exit in 2 stream {_2_stream}')
+    print(f'Exit in 3 stream {_3_stream}')
+    print(f'Full deepth {full_deepth}')
 
-    print(f'lh_stream {lh_stream}')
-    print(f'rh_stream {rh_stream}')
-    print(f'b_stream {b_stream}')
+    print(f'Exit by lh_stream {lh_stream}')
+    print(f'Exit by rh_stream {rh_stream}')
+    print(f'Exit by b_stream {b_stream}')
 
     return early_exit_total, total_samples, ratio
 

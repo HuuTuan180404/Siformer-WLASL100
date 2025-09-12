@@ -358,8 +358,6 @@ class SiFormer(nn.Module):
         new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype = torch.float32)
         new_body = body.permute(1, 0, 2).type(dtype = torch.float32)
 
-        # feature_map = self.feature_extractor(new_inputs)
-        # transformer_in = feature_map + self.pos_embedding
         l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
         r_hand_in = new_r_hand + self.r_hand_embedding
         body_in = new_body + self.body_embedding
