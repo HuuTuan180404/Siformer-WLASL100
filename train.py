@@ -323,7 +323,7 @@ def train(args):
                 logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_top1))
                 
                 # === Top K ===
-                _, _, eval_acc_topk = eval_acc_topk(tested_model, eval_loader, device)
+                _, _, eval_acc_topk = evaluate_top_k(tested_model, eval_loader, device)
 
                 if eval_acc_topk > top_result_topk:
                     top_result_topk = eval_acc_topk
@@ -338,7 +338,7 @@ def train(args):
 
             print('\n=== Parameter statistics ===')
             logging.info('\n=== Parameter statistics ===')
-            calc_total_params(model)
+            calc_total_params(model_top)
 
             model_top.to(device)
             model_top.eval()
