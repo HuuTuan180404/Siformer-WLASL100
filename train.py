@@ -530,6 +530,7 @@ def test(args, top_result_name):
         device = torch.device("cuda")
 
     model = torch.load(path_to_load, weights_only=False)
+    
 
     eval_loader = None
     if args.testing_set_path:
@@ -538,13 +539,16 @@ def test(args, top_result_name):
                                     num_workers=args.num_worker)
 
     if model and eval_loader:
-        # pred_correct_top1, pred_all_top1, ratio_top1 = danh_gia_top_1(model, eval_loader, device)
-        # print('=== TOP 1 ===')
-        # print(f'{pred_correct_top1}/{pred_all_top1} = {ratio_top1:.2%}')
+        model.to(device)
+        model.eval()
+
+        pred_correct_top1, pred_all_top1, ratio_top1 = danh_gia_top_1(model, eval_loader, device)
+        print('=== TOP 1 ===')
+        print(f'{pred_correct_top1}/{pred_all_top1} = {ratio_top1}')
 
         pred_correct_top5, pred_all_top5, ratio_top5= danh_gia_top_k(model, eval_loader, device)
         print('=== TOP 5 ===')
-        print(f'{pred_correct_top5}/{pred_all_top5} = {ratio_top5:.2%}')
+        print(f'{pred_correct_top5}/{pred_all_top5} = {ratio_top5}')
 
 
 def danh_gia_top_1(model, dataloader, device):
@@ -599,9 +603,6 @@ def danh_gia_top_k(model, dataloader, device, k=5):
                 output = model(l_hand, r_hand, body, training=False)
                 output = output.unsqueeze(0).expand(1, -1, -1)
 
-                # print(label[0])
-
-                # print(torch.topk(output, k).indices.tolist())
                 topK= torch.topk(output, k).indices.flatten().tolist()
 
                 _ = label[0]
