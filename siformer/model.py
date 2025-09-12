@@ -210,14 +210,14 @@ class CombinedEncoder(nn.Module):
             feats = layer(feats, src_mask = src_mask, src_key_padding_mask = src_key_padding_mask)
 
         # 1) PBE per-stream
-        l_hand_x = self.pbe_lh(l_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-        r_hand_x = self.pbe_rh(r_hand_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
-        body_x   = self.pbe_body(body_x, mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)    
+        l_hand_x = self.pbe_lh(feats[0], mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
+        r_hand_x = self.pbe_rh(feats[1], mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)
+        body_x   = self.pbe_body(feats[2], mask = src_mask, key_padding_mask = src_key_padding_mask, training = training)    
 
         # Norm cuối
-        feats[0] = self.norm_lh(feats[0])
-        feats[1] = self.norm_rh(feats[1])
-        feats[2] = self.norm_body(feats[2])
+        feats[0] = self.norm_lh(l_hand_x)
+        feats[1] = self.norm_rh(r_hand_x)
+        feats[2] = self.norm_body(body_x)
         return feats  # [LH, RH, Body] đã fused
 
 
