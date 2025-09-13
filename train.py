@@ -319,9 +319,6 @@ def train(args):
                     top_result_top1 = eval_acc_top1
                     top_result_name_top1 = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_top1))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_top1))
-                
                 # === Top K ===
                 _, _, eval_acc_topk = evaluate_top_k(tested_model, eval_loader, device)
 
@@ -329,10 +326,19 @@ def train(args):
                     top_result_topk = eval_acc_topk
                     top_result_name_topk = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-                print("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_topk))
-                logging.info("checkpoint_" + checkpoint_id + "_" + str(i) + "  ->  " + str(eval_acc_topk))
+                print(
+                    f"checkpoint_{checkpoint_id}_{i}  ->  "
+                    f"Top 1: {eval_acc_top1:<8} | "
+                    f"Top 5: {eval_acc_topk:<8}"
+                )
 
-        path_to_load = "out-checkpoints/" + top_result_name_top1
+                logging.info(
+                    f"checkpoint_{checkpoint_id}  ->  "
+                    f"Top 1: {eval_acc_top1:<8} | "
+                    f"Top 5: {eval_acc_topk:<8}"
+                )
+
+        path_to_load = "out-checkpoints/" + top_result_name_top1 + '.pth'
         if os.path.exists(path_to_load):
             model_top=torch.load(path_to_load, weights_only=False)
 
