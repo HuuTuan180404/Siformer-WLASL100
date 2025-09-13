@@ -1,11 +1,20 @@
-# utils
-import logging
 import torch
 import torch.nn.functional as F
 import time
 from statistics import mean
 
-import utils as logger
+from utils import logger
+
+
+def calc_total_params(model = None):
+    if model is not None:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        frozen_params = total_params - trainable_params
+
+        logger(f"Total params: {total_params:,}")
+        logger(f"Trainable params: {trainable_params:,}")
+        logger(f"Frozen params: {frozen_params:,}")
 
 
 def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None):
@@ -185,21 +194,6 @@ def evaluate_top_k(model, dataloader, device, k=5):
     return pred_correct, pred_all, (pred_correct / pred_all)
 
 
-def calc_total_params(model = None):
-    if model is not None:
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        frozen_params = total_params - trainable_params
-
-
-
-        print(f"🔹 Total params: {total_params:,}")
-        print(f"🔹 Trainable params: {trainable_params:,}")
-        print(f"🔹 Frozen params: {frozen_params:,}")
-
-        logging.info(f"🔹 Total params: {total_params:,}")
-        logging.info(f"🔹 Trainable params: {trainable_params:,}")
-        logging.info(f"🔹 Frozen params: {frozen_params:,}")
 
 
 def get_sequence_list(num):
