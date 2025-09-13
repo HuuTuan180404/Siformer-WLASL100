@@ -98,7 +98,6 @@ def get_default_args():
 
 
 def train(args):
-    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
     # MARK: TRAINING PREPARATION AND MODULES
 
     # Initialize all the random seeds
@@ -120,6 +119,9 @@ def train(args):
             logging.FileHandler(args.experiment_name + "_" + str(args.experimental_train_split).replace(".", "") + ".log")
         ]
     )
+
+    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
+
 
     # Set device to CUDA only if applicable
     device = torch.device("cpu")
