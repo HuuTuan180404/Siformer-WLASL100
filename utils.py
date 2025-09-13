@@ -1,5 +1,6 @@
 
 import numpy as np
+import logging
 
 from collections import Counter
 from torch.utils.data import Subset
@@ -19,6 +20,9 @@ def __balance_val_split(dataset, val_split=0.):
 
     return train_dataset, val_dataset
 
+def logger(message=''):
+    print(message)
+    logging.info(message)
 
 def __split_of_train_sequence(subset: Subset, train_split=1.0):
     if train_split == 1:

@@ -15,7 +15,7 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 from pathlib import Path
 
-from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics
+from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics, logger
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.model import SiFormer, SpoTer
 from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params
@@ -98,6 +98,7 @@ def get_default_args():
 
 
 def train(args):
+    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
     # MARK: TRAINING PREPARATION AND MODULES
 
     # Initialize all the random seeds
@@ -196,20 +197,15 @@ def train(args):
     checkpoint_index = 0
 
     if args.experimental_train_split:
-        print(
-            "Starting " + args.experiment_name + "_" + str(args.experimental_train_split).replace(".", "") + "...")
-        logging.info(
+        logger(
             "Starting " + args.experiment_name + "_" + str(args.experimental_train_split).replace(".", "") + "...")
     else:
-        print("Starting " + args.experiment_name + "...")
-        logging.info("Starting " + args.experiment_name + "...")
+        logger("Starting " + args.experiment_name + "...")
 
-    print("Training using " + args.training_set_path + "...")
-    logging.info("Training using " + args.training_set_path + "...")
+    logger("Training using " + args.training_set_path + "...")
 
     if args.validation_set == "from-file":
-        print("Validation using " + args.validation_set_path + "...\n\n")
-        logging.info("Validation using " + args.validation_set_path + "...\n\n")
+        logger("Validation using " + args.validation_set_path + "...\n\n")
 
     total_train_time = 0
     avg_train_time_sec_list = []
@@ -245,34 +241,23 @@ def train(args):
                 torch.save(slr_model, "out-checkpoints/" + args.experiment_name + "/checkpoint_v_" + str(
                     checkpoint_index) + ".pth")
 
-                print(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
+                logger(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
                       + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
-                logging.info(f'Save checkpoint for [{str(epoch + 1)}] as ' + "out-checkpoints/" + args.experiment_name
-                             + "/checkpoint_v_" + str(checkpoint_index) + ".pth")
 
         if epoch % args.log_freq == 0:
-            print(
+            logger(
                 "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
                     train_acc))
-            print(
-                f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
-            )
-            logging.info(
-                "[" + str(epoch + 1) + "] TRAIN  loss: " + str(train_loss.item() / len(train_loader)) + " acc: " + str(
-                    train_acc))
-            logging.info(
+            logger(
                 f"[{str(epoch + 1)}] AVG TRAIN time per sample (sec): {str(avg_train_time)} "
             )
 
             if val_loader:
-                print("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
-                logging.info("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
+                logger("[" + str(epoch + 1) + "] VALIDATION  acc: " + str(val_acc))
 
-                print("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
-                logging.info("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
+                logger("[" + str(epoch + 1) + "] VALIDATION  Top 5 acc: " + str(top_val_acc))
 
-            print("")
-            logging.info("")
+            logger("")
 
         # Reset the top accuracies on static subsets
         if epoch % 10 == 0:
@@ -282,11 +267,9 @@ def train(args):
         lr_progress.append(optimizer.param_groups[0]["lr"])
 
     if args.record_training_time:
-        print(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
-        print(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
+        logger(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
+        logger(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
 
-        logging.info(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
-        logging.info(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
 
     top_result_top1, top_result_name_top1 = 0, ""
     top_result_topk, top_result_name_topk = 0, ""
@@ -295,8 +278,7 @@ def train(args):
 
     if eval_loader:
         # MARK: TESTING
-        print("\nTesting checkpointed models starting...\n")
-        logging.info("\nTesting checkpointed models starting...\n")
+        logger("\nTesting checkpointed models starting...\n")
         for i in range(11):            
             for checkpoint_id in ["t", "v"]:
                 path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
@@ -326,14 +308,8 @@ def train(args):
                     top_result_topk = eval_acc_topk
                     top_result_name_topk = args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i)
 
-                print(
+                logger(
                     f"checkpoint_{checkpoint_id}_{i}  ->  "
-                    f"Top 1: {eval_acc_top1:<8} | "
-                    f"Top 5: {eval_acc_topk:<8}"
-                )
-
-                logging.info(
-                    f"checkpoint_{checkpoint_id}  ->  "
                     f"Top 1: {eval_acc_top1:<8} | "
                     f"Top 5: {eval_acc_topk:<8}"
                 )
@@ -342,36 +318,34 @@ def train(args):
         if os.path.exists(path_to_load):
             model_top=torch.load(path_to_load, weights_only=False)
 
-            print('\n=== Parameter statistics ===')
-            logging.info('\n=== Parameter statistics ===')
+            logger('\n=== Parameter statistics ===')
             calc_total_params(model_top)
 
             model_top.to(device)
             model_top.eval()
 
-            print('\n=== Number of early exits ===')
-            logging.info('\n=== Number of early exits ===')
+            logger('\n=== Number of early exits ===')
 
             if train_loader:
                 train_exited, train_total, train_ratio = compute_early_exit_stats(model_top, train_loader, device)
-                print(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
+                logger(f"[Train] {train_exited}/{train_total} | {train_ratio:.2%}")
+                logger()
             if val_loader:
                 val_exited, val_total, val_ratio = compute_early_exit_stats(model_top, val_loader, device)
-                print(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
+                logger(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
+                logger()
+
 
             if eval_loader:
                 test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
-                print(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
+                logger(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
+                logger()
 
-        print("\nThe top result was recorded at " + str(
-            top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
-        logging.info("\nThe top result was recorded at " + str(
-            top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
+        
 
-        print("\nThe top result was recorded at " + str(
+        logger("\nThe top result was recorded at " + str(
             top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
-        logging.info("\nThe top result was recorded at " + str(
-            top_result_topk) + " testing accuracy. The best checkpoint is " + top_result_name_topk + ".")
+        
 
     # PLOT 0: Performance (loss, accuracies) chart plotting
     if args.plot_stats:
@@ -416,8 +390,7 @@ def train(args):
 
         fig1.savefig("out-img/" + args.experiment_name + "_tt.png")
 
-    print("\nAny desired statistics have been plotted.\nThe experiment is finished.")
-    logging.info("\nAny desired statistics have been plotted.\nThe experiment is finished.")
+    logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
 if __name__ == '__main__':
@@ -431,7 +404,7 @@ if __name__ == '__main__':
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_com_layers=1,
+        num_com_layers=2,
         num_enc_layers =3,
         num_dec_layers=2,
         patience=1

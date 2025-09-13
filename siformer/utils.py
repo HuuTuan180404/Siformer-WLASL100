@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import time
 from statistics import mean
 
+import utils as logger
+
 
 def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None):
     pred_correct, pred_all = 0, 0
@@ -102,15 +104,14 @@ def compute_early_exit_stats(model, dataloader, device):
     
     ratio = early_exit_total / total_samples if total_samples > 0 else 0
 
-    print(f'Exit in 1 stream {_1_stream}')
-    print(f'Exit in 2 stream {_2_stream}')
-    print(f'Exit in 3 stream {_3_stream}')
-    print(f'Full deepth {full_deepth}')
-
-    print(f'Exit by lh_stream {lh_stream}')
-    print(f'Exit by rh_stream {rh_stream}')
-    print(f'Exit by b_stream {b_stream}')
-
+    logger(f'Exit in 1 stream {_1_stream}')
+    logger(f'Exit in 2 stream {_2_stream}')
+    logger(f'Exit in 3 stream {_3_stream}')
+    logger(f'Full deepth {full_deepth}')
+    logger(f'Exit by lh_stream {lh_stream}')
+    logger(f'Exit by rh_stream {rh_stream}')
+    logger(f'Exit by b_stream {b_stream}')
+    
     return early_exit_total, total_samples, ratio
 
 
@@ -190,9 +191,15 @@ def calc_total_params(model = None):
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         frozen_params = total_params - trainable_params
 
+
+
         print(f"🔹 Total params: {total_params:,}")
         print(f"🔹 Trainable params: {trainable_params:,}")
         print(f"🔹 Frozen params: {frozen_params:,}")
+
+        logging.info(f"🔹 Total params: {total_params:,}")
+        logging.info(f"🔹 Trainable params: {trainable_params:,}")
+        logging.info(f"🔹 Frozen params: {frozen_params:,}")
 
 
 def get_sequence_list(num):
