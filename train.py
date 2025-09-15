@@ -392,6 +392,7 @@ def train(args):
 
         fig1.savefig("out-img/" + args.experiment_name + "_tt.png")
 
+    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
@@ -406,11 +407,21 @@ if __name__ == '__main__':
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_com_layers=2,
+        num_com_layers=1,
         num_enc_layers =3,
         num_dec_layers=2,
-        patience=1
+        patience=0
     )
-
     args = parser.parse_args()
-    train(args)
+
+    # TH1: com=1 | enc=3 | dec=2 | pat=[1,2]
+    for pat in [1, 2]:
+        args.patience=pat
+        train(args)
+    
+    
+    # TH2: com=1 | enc=3 | dec=4 | pat=[1,2,3]
+    args.num_dec_layers=4
+    for pat in [1, 2, 3]:
+        args.patience=pat
+        train(args)
