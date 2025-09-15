@@ -19,6 +19,7 @@ class PBEEDecoder(nn.TransformerDecoder):
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
              for _ in range(num_layers)])
+        self.is_exit_early = False
 
     def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None,
                 memory_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None,
@@ -72,7 +73,7 @@ class PBEEDecoder(nn.TransformerDecoder):
 
                 patient_result = classifier_out
                 if patient_counter == self.patience:
-                    # print("break")
+                    self.is_exit_early = True
                     break
 
         if self.norm is not None:

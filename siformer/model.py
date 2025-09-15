@@ -27,8 +27,8 @@ def _get_clones(mod, n):
 class PerStreamPBE(nn.Module):
     """ PBEEncoder cho từng stream riêng. """
     def __init__(self, d_model: int, nhead: int, num_layers: int, dim_feedforward: int, dropout: float,
-                 activation: nn.Module, enc_attn, # AttentionLayer(...)
-                 patience: int = 1, inner_classifiers_config: List[int] = None,
+                 activation: nn.Module, enc_attn,  # AttentionLayer(...)
+                 pat_enc: int = 1, inner_classifiers_config: List[int] = None,
                  projections_config: List[int] = None):
         super().__init__()
         
@@ -37,7 +37,7 @@ class PerStreamPBE(nn.Module):
                                      activation = "relu" if isinstance(activation, nn.ReLU) else "gelu")
 
         self.encoder = PBEEncoder(encoder_layer = encoder_layer, num_layers = num_layers,
-                                  norm = nn.LayerNorm(d_model), patience = patience,
+                                  norm = nn.LayerNorm(d_model), pat_enc= pat_enc,
                                   inner_classifiers_config = inner_classifiers_config,
                                   projections_config = projections_config)
 
@@ -152,7 +152,7 @@ class CombinedEncoder(nn.Module):
     def __init__(self, d_model_list: List[int], nhead_list: List[int],
                  num_encoder_layers: int, num_comm_layers: int,
                  dim_feedforward: int, dropout: float,
-                 activation: nn.Module, attn_layer_factory, patience: int = 1,
+                 activation: nn.Module, attn_layer_factory, pat_enc: int = 1,
                  inner_classifiers_config: List[int] = None,
                  projections_config: List[int] = None):
         super().__init__()
@@ -167,21 +167,21 @@ class CombinedEncoder(nn.Module):
                                    num_layers = num_encoder_layers,
                                    dim_feedforward = dim_feedforward, dropout = dropout,
                                    activation = activation, enc_attn = self.self_attn_lh,
-                                   patience = patience, inner_classifiers_config=[d_model_list[0], inner_classifiers_config[1]],
+                                   pat_enc= pat_enc, inner_classifiers_config=[d_model_list[0], inner_classifiers_config[1]],
                                    projections_config=projections_config)
         
         self.pbe_rh = PerStreamPBE(d_model = d_model_list[1], nhead = nhead_list[1],
                                    num_layers = num_encoder_layers,
                                    dim_feedforward = dim_feedforward, dropout = dropout,
                                    activation = activation, enc_attn = self.self_attn_rh,
-                                   patience = patience, inner_classifiers_config=[d_model_list[1], inner_classifiers_config[1]],
+                                   pat_enc= pat_enc, inner_classifiers_config=[d_model_list[1], inner_classifiers_config[1]],
                                    projections_config=projections_config)
         
         self.pbe_body = PerStreamPBE(d_model = d_model_list[2], nhead = nhead_list[2],
                                      num_layers = num_encoder_layers,
                                      dim_feedforward = dim_feedforward, dropout = dropout,
                                      activation = activation, enc_attn = self.self_attn_body,
-                                     patience = patience, inner_classifiers_config=[d_model_list[2], inner_classifiers_config[1]],
+                                     pat_enc= pat_enc, inner_classifiers_config=[d_model_list[2], inner_classifiers_config[1]],
                                      projections_config=projections_config)
 
         # 2) Communicating stack
@@ -225,12 +225,13 @@ class FeatureIsolatedTransformer(nn.Transformer):
     def __init__(self, d_model_list: list, nhead_list: list,
                  num_comm_layers: int,
                  num_encoder_layers: int, num_decoder_layers: int,
+                 pat_enc: int = 1, pat_dec: int = 1,
                  dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
-                 inner_classifiers_config: list = None, patience: int = 1, use_pyramid_encoder: bool = False,
+                 inner_classifiers_config: list = None, use_pyramid_encoder: bool = False,
                  distil: bool = False, projections_config: list = None,
-                 IA_encoder: bool = False, IA_decoder: bool = False, 
+                 IA_encoder: bool = False, IA_decoder: bool = False,
                  device = None):  # Dùng **kwargs cho các tham số không dùng đến
 
         super(FeatureIsolatedTransformer, self).__init__(sum(d_model_list), nhead_list[-1], num_encoder_layers,
@@ -248,7 +249,8 @@ class FeatureIsolatedTransformer(nn.Transformer):
         self.use_IA_decoder = IA_decoder
         self.inner_classifiers_config = inner_classifiers_config
         self.projections_config = projections_config
-        self.patience = patience
+        self.pat_enc = pat_enc
+        self.pat_dec = pat_dec
         self.distil = distil
         self.activation = activation
         self.selected_attn = selected_attn
@@ -268,7 +270,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
             dropout = dropout,
             activation = activation,
             attn_layer_factory = attn_layer_factory,
-            patience = patience,
+            pat_enc= pat_enc,
             inner_classifiers_config = inner_classifiers_config,
             projections_config = projections_config
         )
@@ -281,7 +283,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
         decoder_norm = LayerNorm(self.d_model)
         self.inner_classifiers_config[0] = self.d_model
         return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm = decoder_norm,
-                           inner_classifiers_config = self.inner_classifiers_config, patient = self.patience)
+                           inner_classifiers_config = self.inner_classifiers_config, patient = self.pat_dec)
 
     def forward(self, src: list, tgt: Tensor, 
                 src_mask: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
@@ -308,7 +310,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
-                  num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, patience = 1,
+                  num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, pat_enc = 1, pat_dec = 1,
                  seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
@@ -323,11 +325,12 @@ class SiFormer(nn.Module):
             d_model_list = [42, 42, 24], nhead_list = [3, 3, 2, 9],
             num_comm_layers=num_comm_layers,
             num_encoder_layers = num_enc_layers, num_decoder_layers = num_dec_layers,
+            pat_enc=pat_enc, pat_dec=pat_dec,
             selected_attn = attn_type, 
             IA_encoder = IA_encoder, IA_decoder = IA_decoder,
             inner_classifiers_config = [num_hid, num_classes],
             projections_config = [seq_len, 1],  device = device,
-            patience = patience, use_pyramid_encoder = False, distil = False
+            use_pyramid_encoder = False, distil = False
         )
 
         self.projection = nn.Linear(num_hid, num_classes)
@@ -342,6 +345,12 @@ class SiFormer(nn.Module):
         self.transformer.encoder.pbe_lh.encoder.is_exit_early = False
         self.transformer.encoder.pbe_rh.encoder.is_exit_early = False
         self.transformer.encoder.pbe_body.encoder.is_exit_early = False
+
+    def decoder_is_exit_early(self):
+        return self.transformer.decoder.is_exit_early
+
+    def set_decoder_is_exit_early(self):
+        self.transformer.decoder.is_exit_early = False
 
     def forward(self, l_hand, r_hand, body, training):
         batch_size = l_hand.size(0)

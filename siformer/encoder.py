@@ -35,10 +35,10 @@ class PBEEncoder(nn.TransformerEncoder):
     __constants__ = ['norm']
 
     def __init__(self, encoder_layer, num_layers, norm=None, enable_nested_tensor=False,
-                 patience=1, inner_classifiers_config=None, projections_config=None):
+                 pat_enc=1, inner_classifiers_config=None, projections_config=None):
         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
-        print(f'Using custom PBEEncoder: num_layers= {num_layers} | patience= {patience}', )
-        self.patience = patience
+        print(f'Using custom PBEEncoder: num_layers= {num_layers} | patience= {pat_enc}', )
+        self.patience = pat_enc
         self.inner_classifiers = nn.ModuleList(
             [nn.Linear(inner_classifiers_config[0], inner_classifiers_config[1])
              for _ in range(num_layers)]

@@ -92,7 +92,8 @@ def get_default_args():
     parser.add_argument("--FIM", type=bool, default=True, help=" ")
     parser.add_argument("--IA_encoder", type=bool, default=True, help="Determines whether input adaptive encoder will be used")
     parser.add_argument("--IA_decoder", type=bool, default=False, help="Determines whether input adaptive decoder will be used")
-    parser.add_argument("--patience", type=int, default=3, help="Determines the patience for earlier exist")
+    parser.add_argument("--pat_enc", type=int, default=1, help="Determines the patience of encoder for earlier exist")
+    parser.add_argument("--pat_dec", type=int, default=1, help="Determines the patience of decoder for earlier exist")
 
     return parser
 
@@ -120,8 +121,10 @@ def train(args):
         ]
     )
 
-    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
-
+    logger("Experiment parameters:")
+    logger(f"\t\t\tnum_com_layers={args.num_com_layers}")
+    logger(f"\t\t\tnum_enc_layers={args.num_enc_layers} | pat_enc={args.pat_enc}")
+    logger(f"\t\t\tnum_dec_layers={args.num_dec_layers} | pat_enc={args.pat_dec}")
 
     # Set device to CUDA only if applicable
     device = torch.device("cpu")
@@ -135,7 +138,7 @@ def train(args):
                              num_comm_layers=args.num_com_layers,
                               num_enc_layers=args.num_enc_layers, num_dec_layers=args.num_dec_layers, device=device,
                               IA_encoder=args.IA_encoder, IA_decoder=args.IA_decoder,
-                              patience=args.patience)
+                              pat_enc=args.pat_enc, pat_dec=args.pat_dec)
     else:
         slr_model = SpoTer(num_classes=args.num_classes, num_hid=args.num_seq_elements,
                            num_enc_layers=args.num_enc_layers, num_dec_layers=args.num_dec_layers)
@@ -272,7 +275,6 @@ def train(args):
         logger(f"Total training time taken over {args.epochs} epochs: {str(datetime.timedelta(seconds=total_train_time))}")
         logger(f"Average training time per sample: {str(mean(avg_train_time_sec_list[1:]))}")
 
-
     top_result_top1, top_result_name_top1 = 0, ""
     top_result_topk, top_result_name_topk = 0, ""
     test_accs_t=[]
@@ -347,7 +349,6 @@ def train(args):
 
         logger("\nThe top result was recorded at " + str(
             top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
-        
 
     # PLOT 0: Performance (loss, accuracies) chart plotting
     if args.plot_stats:
@@ -392,7 +393,11 @@ def train(args):
 
         fig1.savefig("out-img/" + args.experiment_name + "_tt.png")
 
-    logger(f"Experiment parameters: num_com_layers={args.num_com_layers}, num_enc_layers={args.num_enc_layers}, num_dec_layers={args.num_dec_layers}, patience={args.patience}")
+    logger("Experiment parameters:")
+    logger(f"\t\t\tnum_com_layers={args.num_com_layers}")
+    logger(f"\t\t\tnum_enc_layers={args.num_enc_layers} | pat_enc={args.pat_enc}")
+    logger(f"\t\t\tnum_dec_layers={args.num_dec_layers} | pat_enc={args.pat_dec}")
+
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
@@ -410,18 +415,15 @@ if __name__ == '__main__':
         num_com_layers=1,
         num_enc_layers =3,
         num_dec_layers=2,
-        patience=0
     )
     args = parser.parse_args()
 
-    # TH1: com=1 | enc=3 | dec=2 | pat=[1,2]
-    for pat in [1, 2]:
-        args.patience=pat
-        train(args)
-    
-    
-    # TH2: com=1 | enc=3 | dec=4 | pat=[1,2,3]
+    # com=1 | enc=3 | dec=4 | pat_enc=1 | pat_dec=2
+    args.pat_enc = 1
+    args.pat_dec = 2
     args.num_dec_layers=4
-    for pat in [1, 2, 3]:
-        args.patience=pat
-        train(args)
+    train(args)
+
+    # com=1 | enc=3 | dec=2 | pat_enc=1 | pat_dec=2
+    args.num_dec_layers=2
+    train(args)

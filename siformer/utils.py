@@ -60,7 +60,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
 
 
 def compute_early_exit_stats(model, dataloader, device):
-    early_exit_total = 0
+    early_exit_total = dec_early_exit_total = 0
     _1_stream=0
     _2_stream=0
     _3_stream=0
@@ -109,10 +109,13 @@ def compute_early_exit_stats(model, dataloader, device):
                 else:
                     full_deepth+=1
 
+                dec_early_exit_total+=1 if model.decoder_is_exit_early() else 0
+
                 early_exit_total+= 1 if sum == True else 0
     
     ratio = early_exit_total / total_samples if total_samples > 0 else 0
 
+    logger(f'ENCODER')
     logger(f'Exit in 1 stream {_1_stream}')
     logger(f'Exit in 2 stream {_2_stream}')
     logger(f'Exit in 3 stream {_3_stream}')
@@ -120,7 +123,9 @@ def compute_early_exit_stats(model, dataloader, device):
     logger(f'Exit by lh_stream {lh_stream}')
     logger(f'Exit by rh_stream {rh_stream}')
     logger(f'Exit by b_stream {b_stream}')
-    
+
+    logger(f'DECODER: {dec_early_exit_total}/{total_samples}')
+
     return early_exit_total, total_samples, ratio
 
 
@@ -149,7 +154,6 @@ def evaluate(model, dataloader, device):
                 if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(label):
                     stats[int(label)][0] += 1
                     pred_correct += 1
-
 
                 stats[int(label)][1] += 1
                 pred_all += 1
@@ -192,8 +196,6 @@ def evaluate_top_k(model, dataloader, device, k=5):
                 pred_all += 1
 
     return pred_correct, pred_all, (pred_correct / pred_all)
-
-
 
 
 def get_sequence_list(num):
