@@ -414,16 +414,9 @@ if __name__ == '__main__':
         num_worker=2,
         num_com_layers=1,
         num_enc_layers =3,
-        num_dec_layers=2,
+        num_dec_layers=4,
+        pat_enc=1,
+        pat_dec=2
     )
     args = parser.parse_args()
-
-    # com=1 | enc=3 | dec=4 | pat_enc=1 | pat_dec=2
-    args.pat_enc = 1
-    args.pat_dec = 2
-    args.num_dec_layers=4
-    train(args)
-
-    # com=1 | enc=3 | dec=2 | pat_enc=1 | pat_dec=2
-    args.num_dec_layers=2
     train(args)
