@@ -18,7 +18,7 @@ from pathlib import Path
 from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics, logger
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.model import SiFormer, SpoTer
-from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params
+from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params, ConfusionMatrix
 from siformer.gaussian_noise import GaussianNoise
 
 import time
@@ -181,7 +181,7 @@ def train(args):
     if args.testing_set_path:
         
         eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
+        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, generator=g,
                                  num_workers=args.num_worker)
         
     else:
@@ -339,13 +339,10 @@ def train(args):
                 logger(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
                 logger()
 
-
             if eval_loader:
                 test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
                 logger(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
                 logger()
-
-        
 
         logger("\nThe top result was recorded at " + str(
             top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
@@ -401,6 +398,38 @@ def train(args):
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
+def test(args):
+    checkpoints = ['checkpoint_v_10.pth']
+    path_dir = 'out-checkpoints/WLASL100'
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    os.environ["PYTHONHASHSEED"] = str(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+
+    device = torch.device("cpu")
+    if torch.cuda.is_available():
+        print("Cuda is available: True")
+        device = torch.device("cuda")
+
+    eval_set = CzechSLRDataset('datasets/WLASL100_val_25fps.csv')
+    eval_loader = DataLoader(eval_set, batch_size=24, shuffle=False, generator=g, num_workers=2)
+
+    for ckp in checkpoints:
+        path = f'{path_dir}/{ckp}'
+        if not os.path.exists(path):
+            continue
+        model=torch.load(path, weights_only=False)
+
+        print(f'=== {ckp} ===')
+        ConfusionMatrix(model, eval_loader, device)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
 
@@ -419,4 +448,6 @@ if __name__ == '__main__':
         pat_dec=2
     )
     args = parser.parse_args()
-    train(args)
+    # train(args)
+
+    test(args)

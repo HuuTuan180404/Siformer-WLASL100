@@ -2,6 +2,10 @@ import torch
 import torch.nn.functional as F
 import time
 from statistics import mean
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
 
 from utils import logger
 
@@ -164,6 +168,66 @@ def evaluate(model, dataloader, device):
 
     return pred_correct, pred_all, (pred_correct / pred_all)
 
+
+def ConfusionMatrix(model, dataloader, device):
+    y_true = []
+    y_pred = []
+
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        for i, data in enumerate(dataloader):
+            l_hands, r_hands, bodies, labels = data
+            l_hands = l_hands.to(device)  # [24, 204, 21, 2]
+            r_hands = r_hands.to(device)  # [24, 204, 21, 2]
+            bodies = bodies.to(device)  # [24, 204, 12, 2]
+            labels = labels.to(device, dtype=torch.long)  # [24, 1]
+
+            for j in range(labels.size(0)):
+                l_hand = l_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                r_hand = r_hands[j].unsqueeze(0)  # [1, 204, 21, 2]
+                body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
+                label = labels[j]
+
+                output = model(l_hand, r_hand, body, training=False) # [1, num_classes]
+                pred_class = torch.argmax(output, dim=1).item()
+
+                y_true.append(int(label))
+                y_pred.append(pred_class)
+
+    pred_correct = 0
+
+    stats = {i: [0, 0] for i in range(100)}
+    for i, v in enumerate(y_true):
+        if v == y_pred[i]:
+            pred_correct+=1
+            stats[v][0]+=1
+        stats[v][1]+=1
+    
+    count_pred_correct ={i: 0 for i in range(9)}
+
+    for key in stats.keys():
+        count_pred_correct[stats[key][0]] += 1
+
+    print(count_pred_correct)
+
+    # print(pred_correct / 800)
+
+
+    # cm = confusion_matrix(y_true, y_pred, labels=np.arange(100))
+    # plt.figure(figsize=(14, 12))
+    # sns.heatmap(cm, cmap="Blues", cbar=True, square=True,
+    #             xticklabels=False, yticklabels=False)  # tắt label nếu có quá nhiều lớp
+    # plt.title("Confusion Matrix (Normalized) - WLASL100", fontsize=16)
+    # plt.xlabel("Predicted label")
+    # plt.ylabel("True label")
+    # plt.show()
+
+    # print(len(y_true))
+    # print(len(y_pred))
+
+    # print(classification_report(y_true, y_pred, digits=6))
 
 def evaluate_top_k(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0
