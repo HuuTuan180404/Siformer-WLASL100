@@ -196,7 +196,7 @@ def ConfusionMatrix(model, dataloader, device):
                 y_true.append(int(label))
                 y_pred.append(pred_class)
 
-    pred_correct = 0
+    # pred_correct = 0
 
     stats = {i: [0, 0] for i in range(100)}
     for i, v in enumerate(y_true):
@@ -205,27 +205,24 @@ def ConfusionMatrix(model, dataloader, device):
             stats[v][0]+=1
         stats[v][1]+=1
     
-    count_pred_correct ={i: 0 for i in range(9)}
+    # count_pred_correct ={i: 0 for i in range(9)}
 
-    for key in stats.keys():
-        count_pred_correct[stats[key][0]] += 1
+    # for key in stats.keys():
+    #     count_pred_correct[stats[key][0]] += 1
 
-    print(count_pred_correct)
+    # print(count_pred_correct)
 
-    # print(pred_correct / 800)
+    print(pred_correct / 800)
 
 
     # cm = confusion_matrix(y_true, y_pred, labels=np.arange(100))
     # plt.figure(figsize=(14, 12))
-    # sns.heatmap(cm, cmap="Blues", cbar=True, square=True,
+    # sns.heatmap(cm, cmap="Blues", cbar=True, square=True, annot=True, fmt='d',
     #             xticklabels=False, yticklabels=False)  # tắt label nếu có quá nhiều lớp
     # plt.title("Confusion Matrix (Normalized) - WLASL100", fontsize=16)
     # plt.xlabel("Predicted label")
     # plt.ylabel("True label")
     # plt.show()
-
-    # print(len(y_true))
-    # print(len(y_pred))
 
     # print(classification_report(y_true, y_pred, digits=6))
 
