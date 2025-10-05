@@ -162,10 +162,6 @@ def evaluate(model, dataloader, device):
                 stats[int(label)][1] += 1
                 pred_all += 1
 
-    acc_per_class=0
-    for k, v in stats.items():
-        acc_per_class += v[0]/v[1]
-
     return pred_correct, pred_all, (pred_correct / pred_all)
 
 

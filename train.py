@@ -18,7 +18,7 @@ from pathlib import Path
 from utils import __balance_val_split, __split_of_train_sequence, __log_class_statistics, logger
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.model import SiFormer, SpoTer
-from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params, ConfusionMatrix
+from siformer.utils import train_epoch, evaluate, evaluate_top_k, compute_early_exit_stats, calc_total_params
 from siformer.gaussian_noise import GaussianNoise
 
 import time
@@ -49,7 +49,7 @@ def get_default_args():
     parser.add_argument("--validation_set", type=str, choices=["from-file", "split-from-train", "none"],
                         default="none",
                         help="Type of validation set construction. See README for further rederence")
-    parser.add_argument("--validation_set_size", type=float,
+    parser.add_argument("--validation_set_size", type=float, default=0.2,
                         help="Proportion of the training set to be split as validation set, if 'validation_size' is set"
                              " to 'split-from-train'")
     parser.add_argument("--validation_set_path", type=str, default="", help="Path to the validation dataset CSV file")
@@ -168,7 +168,7 @@ def train(args):
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                 num_workers=args.num_worker)
     elif args.validation_set == "split-from-train":
-        train_set, val_set = __balance_val_split(train_set, 0.2)
+        train_set, val_set = __balance_val_split(train_set, args.validation_set_size)
 
         val_set.transform = None
         val_set.augmentations = False
@@ -181,7 +181,7 @@ def train(args):
     if args.testing_set_path:
         
         eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=False, generator=g,
+        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
                                  num_workers=args.num_worker)
         
     else:
@@ -339,10 +339,13 @@ def train(args):
                 logger(f"[Val]   {val_exited}/{val_total} | {val_ratio:.2%}")
                 logger()
 
+
             if eval_loader:
                 test_exited, test_total, test_ratio = compute_early_exit_stats(model_top, eval_loader, device)
                 logger(f"[Test]  {test_exited}/{test_total} | {test_ratio:.2%}")
                 logger()
+
+        
 
         logger("\nThe top result was recorded at " + str(
             top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
@@ -356,11 +359,11 @@ def train(args):
         if val_loader:
             ax.plot(range(1, len(val_accs) + 1), val_accs, c="#E0A938", label="Validation accuracy")
         
-        # if len(test_accs_t)>0:
-        #     ax.plot(range(1, len(test_accs_t) + 1), test_accs_t, c="#3366FF", label="Test accuracy (t)")
+        if len(test_accs_t)>0:
+            ax.plot(range(1, len(test_accs_t) + 1), test_accs_t, c="#3366FF", label="Test accuracy (t)")
         
-        # if len(test_accs_v)>0:
-        #     ax.plot(range(1, len(test_accs_v) + 1), test_accs_v, c="#33FF70", label="Test accuracy (v)")
+        if len(test_accs_v)>0:
+            ax.plot(range(1, len(test_accs_v) + 1), test_accs_v, c="#33FF70", label="Test accuracy (v)")
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -398,41 +401,10 @@ def train(args):
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
-def test(args):
-    checkpoints = ['checkpoint_v_10.pth']
-    path_dir = 'out-checkpoints/WLASL100'
-
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    os.environ["PYTHONHASHSEED"] = str(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    torch.backends.cudnn.deterministic = True
-    g = torch.Generator()
-    g.manual_seed(args.seed)
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available():
-        print("Cuda is available: True")
-        device = torch.device("cuda")
-
-    eval_set = CzechSLRDataset('datasets/WLASL100_val_25fps.csv')
-    eval_loader = DataLoader(eval_set, batch_size=24, shuffle=False, generator=g, num_workers=2)
-
-    for ckp in checkpoints:
-        path = f'{path_dir}/{ckp}'
-        if not os.path.exists(path):
-            continue
-        model=torch.load(path, weights_only=False)
-
-        print(f'=== {ckp} ===')
-        ConfusionMatrix(model, eval_loader, device)
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
 
+    # WLASL100 default args
     parser.set_defaults(
         experiment_name="WLASL100",
         training_set_path="datasets/WLASL100_train_25fps.csv",
@@ -447,7 +419,22 @@ if __name__ == '__main__':
         pat_enc=1,
         pat_dec=2
     )
+
+    # LSA64 default args
+    # parser.set_defaults(
+    #     experiment_name="LSA64",
+    #     training_set_path="datasets/LSA64_60fps.csv",
+    #     experimental_train_split = 0.8,
+    #     validation_set="split-from-train",
+    #     num_classes=64,
+    #     IA_decoder=True,
+    #     num_worker=2,
+    #     num_com_layers=1,
+    #     num_enc_layers =3,
+    #     num_dec_layers=4,
+    #     pat_enc=1,
+    #     pat_dec=2
+    # )
+
     args = parser.parse_args()
     train(args)
-
-    # test(args)
