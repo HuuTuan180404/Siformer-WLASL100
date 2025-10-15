@@ -84,6 +84,7 @@ coverage.xml
 *.mp4
 *.png
 *.pdf
+!Report*.pdf
 *.json
 *.doc
 *.docx
