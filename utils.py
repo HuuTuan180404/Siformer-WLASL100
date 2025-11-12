@@ -1,9 +1,14 @@
 
 import numpy as np
+import logging
 
 from collections import Counter
 from torch.utils.data import Subset
 from sklearn.model_selection import train_test_split
+
+def logger(message=''):
+    print(message)
+    logging.info(message)
 
 
 def __balance_val_split(dataset, val_split=0.):

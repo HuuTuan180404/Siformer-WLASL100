@@ -199,7 +199,7 @@ class ProbAttention(nn.Module):
         else:
             return (context_in, None)
 
-    def forward(self, queries, keys, values, attn_mask):
+    def forward(self, queries, keys, values, attn_mask=None):
         B, L_Q, H, D = queries.shape
         _, L_K, _, _ = keys.shape
 
@@ -247,7 +247,7 @@ class AttentionLayer(nn.Module):
         self._qkv_same_embed_dim = True
         self.attention_scores = None
 
-    def forward(self, queries, keys, values, attn_mask, key_padding_mask=None, need_weights=False, is_causal=None):
+    def forward(self, queries, keys, values, attn_mask=None, key_padding_mask=None, need_weights=False, is_causal=None):
         queries = queries.permute(1, 0, 2).type(dtype=torch.float32)
         keys = keys.permute(1, 0, 2).type(dtype=torch.float32)
         values = values.permute(1, 0, 2).type(dtype=torch.float32)

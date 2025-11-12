@@ -11,7 +11,7 @@ from siformer.utils import get_sequence_list
 from typing import Optional, Union, Callable, List
 from torch.nn.modules.normalization import LayerNorm
 from siformer.decoder import DecoderLayer, PBEEDecoder
-from siformer.my_encoder import  EncoderLayer, PBEEncoder
+from siformer.encoder import  EncoderLayer, PBEEncoder
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention, CrossAttention
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
@@ -175,8 +175,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
                  dim_feedforward: int = 2048, dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  selected_attn: str = 'prob', output_attention: str = True,
-                 inner_classifiers_config: list = None, patience: int = 1, 
-                 use_pyramid_encoder: bool = False,
+                 inner_classifiers_config: list = None, patience: int = 1, use_pyramid_encoder: bool = False,
                  distil: bool = False, projections_config: list = None,
                  IA_encoder: bool = False, IA_decoder: bool = False, 
                  device = None):  # Dùng **kwargs cho các tham số không dùng đến
@@ -207,42 +206,19 @@ class FeatureIsolatedTransformer(nn.Transformer):
             return AttentionLayer(Attn(output_attention = output_attention), d_model, n_heads, mix = False)
 
         # Encoder kết hợp
-        # self.encoder = CombinedEncoder(
-        #     d_model_list = d_model_list,
-        #     nhead_list = nhead_list,
-        #     num_encoder_layers= num_encoder_layers,
-        #     num_comm_layers = num_comm_layers,
-        #     dim_feedforward = dim_feedforward,
-        #     dropout = dropout,
-        #     activation = activation,
-        #     attn_layer_factory = attn_layer_factory,
-        #     patience = patience,
-        #     inner_classifiers_config = inner_classifiers_config,
-        #     projections_config = projections_config
-        # )
-
-        # ============
-
-        attn_lh = AttentionLayer(ProbAttention(), d_model_list[0], nhead_list[0], mix = False)
-        attn_rh = AttentionLayer(ProbAttention(), d_model_list[1], nhead_list[1], mix = False)
-        attn_body = AttentionLayer(ProbAttention(), d_model_list[2], nhead_list[2], mix = False)
-
-        encoder_layer = EncoderLayer(
-            self_attn_lh=attn_lh,
-            self_attn_rh=attn_rh,
-            self_attn_body=attn_body,
-            joints_list=[21, 21, 12],
-            nhead_list=nhead_list,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu"
+        self.encoder = CombinedEncoder(
+            d_model_list = d_model_list,
+            nhead_list = nhead_list,
+            num_encoder_layers= num_encoder_layers,
+            num_comm_layers = num_comm_layers,
+            dim_feedforward = dim_feedforward,
+            dropout = dropout,
+            activation = activation,
+            attn_layer_factory = attn_layer_factory,
+            patience = patience,
+            inner_classifiers_config = inner_classifiers_config,
+            projections_config = projections_config
         )
-
-        self.encoder = PBEEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=num_comm_layers
-        )
-        # ============
 
         # --- Khởi tạo Decoder ---
         self.decoder = self.get_custom_decoder(nhead_list[-1])
@@ -260,7 +236,8 @@ class FeatureIsolatedTransformer(nn.Transformer):
                 src_is_causal: Optional[bool] = None, tgt_is_causal: Optional[bool] = None, memory_is_causal: bool = False,
                 training:bool = True, ) -> Tensor:
         
-        lh, rh, body = self.encoder(src[0], src[1], src[2], 
+        lh, rh, body = self.encoder(src_list=src, src_mask = src_mask,
+                                    src_key_padding_mask = src_key_padding_mask,
                                     training = training)
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
@@ -389,17 +366,3 @@ class SpoTer(nn.Module):
         transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
         out = self.projection(transformer_out).squeeze()
         return out
-
-
-if __name__ == '__main__':
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    model = SiFormer(num_classes=100, 
-                     num_hid=108, 
-                     attn_type='prob',
-                    num_comm_layers=1,
-                    num_enc_layers=3, 
-                    num_dec_layers=4, device=device,
-                              IA_encoder=True, IA_decoder=True,
-                              patience=1)
-    
