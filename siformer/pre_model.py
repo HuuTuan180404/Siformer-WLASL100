@@ -11,7 +11,7 @@ from siformer.utils import get_sequence_list
 from typing import Optional, Union, Callable, List
 from torch.nn.modules.normalization import LayerNorm
 from siformer.decoder import DecoderLayer, PBEEDecoder
-from siformer.pre_encoder import EncoderLayer, PBEEncoder
+from siformer.my_encoder import  EncoderLayer, PBEEncoder
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention, CrossAttention
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
@@ -202,27 +202,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
         self.selected_attn = selected_attn
         self.output_attention = output_attention
 
-        def attn_layer_factory(d_model, n_heads):
-            Attn = ProbAttention if selected_attn == 'prob' else FullAttention
-            return AttentionLayer(Attn(output_attention = output_attention), d_model, n_heads, mix = False)
-
-        # Encoder kết hợp
-        # self.encoder = CombinedEncoder(
-        #     d_model_list = d_model_list,
-        #     nhead_list = nhead_list,
-        #     num_encoder_layers= num_encoder_layers,
-        #     num_comm_layers = num_comm_layers,
-        #     dim_feedforward = dim_feedforward,
-        #     dropout = dropout,
-        #     activation = activation,
-        #     attn_layer_factory = attn_layer_factory,
-        #     patience = patience,
-        #     inner_classifiers_config = inner_classifiers_config,
-        #     projections_config = projections_config
-        # )
-
         # ============
-
         attn_lh = AttentionLayer(ProbAttention(), d_model_list[0], nhead_list[0], mix = False)
         attn_rh = AttentionLayer(ProbAttention(), d_model_list[1], nhead_list[1], mix = False)
         attn_body = AttentionLayer(ProbAttention(), d_model_list[2], nhead_list[2], mix = False)
@@ -255,12 +235,13 @@ class FeatureIsolatedTransformer(nn.Transformer):
                            inner_classifiers_config = self.inner_classifiers_config, patient = self.patience)
 
     def forward(self, src: list, tgt: Tensor, 
-                src_mask: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None,                
-                src_is_causal: Optional[bool] = None, tgt_is_causal: Optional[bool] = None, memory_is_causal: bool = False,
-                training:bool = True, ) -> Tensor:
+                  tgt_mask: Optional[Tensor] = None, 
+                  memory_mask: Optional[Tensor] = None,
+                tgt_key_padding_mask: Optional[Tensor] = None, 
+                memory_key_padding_mask: Optional[Tensor] = None,                
+                training:bool = True) -> Tensor:
         
-        lh, rh, body = self.encoder(src[0], src[1], src[2])
+        lh, rh, body = self.encoder(src[0], src[1], src[2], training = training)
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
         full_memory = torch.cat((lh, rh, body), dim = -1) # [L, B, D_sum]
@@ -278,14 +259,14 @@ class FeatureIsolatedTransformer(nn.Transformer):
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
                   num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, patience = 1,
-                 seq_len = 209, device = None, IA_encoder = True, IA_decoder = False):
+                 seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
 
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
-        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42, seq_len = seq_len))
-        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42, seq_len = seq_len))
-        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 24, seq_len = seq_len))
+        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
+        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
+        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 24))
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
         self.transformer = FeatureIsolatedTransformer(

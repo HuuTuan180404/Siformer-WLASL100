@@ -79,6 +79,7 @@ coverage.xml
 .DS_Store
 
 # Bỏ qua dữ liệu
+out-checkpoints/
 *.xlsx
 *.csv
 *.mp4

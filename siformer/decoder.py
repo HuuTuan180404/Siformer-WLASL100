@@ -34,10 +34,6 @@ class PBEEDecoder(nn.TransformerDecoder):
                              memory_mask=memory_mask,
                              tgt_key_padding_mask=tgt_key_padding_mask,
                              memory_key_padding_mask=memory_key_padding_mask)
-                # mod_output = output
-                # if self.norm is not None:
-                #     mod_output = self.norm(mod_output)
-                # _ = self.inner_classifiers[i](mod_output).squeeze()
         else:
             patient_counter = 0
             patient_result = None

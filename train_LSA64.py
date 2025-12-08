@@ -326,13 +326,11 @@ if __name__ == '__main__':
     print(f'Val: {len(val_loader.dataset) if val_loader is not None else None}')
     print(f'Test: {len(eval_loader.dataset) if eval_loader is not None else None}')
 
-    args.num_dec_layers=3
-    args.patience=2
-
-    args.num_com_layers=4
-
-    train(args, train_loader, val_loader, eval_loader)
-
+    for dec in [3, 2, 4, 5, 6]:
+        args.num_dec_layers=dec
+        for com in [4, 1, 2, 3, 5, 6]:
+            args.num_com_layers=com
+            train(args, train_loader, val_loader, eval_loader)
 
 
 '''

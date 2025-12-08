@@ -53,7 +53,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
 def evaluate(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0
     pred_correct_topK = 0
-    stats = {i: [0, 0] for i in range(100)}
+    stats = {i: [0, 0] for i in range(300)}
 
     model.eval()
 
