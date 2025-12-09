@@ -123,7 +123,7 @@ class PBEEncoder(nn.TransformerEncoder):
         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
         print(f'Using custom PBEEncoder: num_layers= {num_layers}')
 
-    def forward(self, lh, rh, body, training):
+    def forward(self, lh, rh, body):
         # lh, rh, body: (L, B, D)
         for i, mod in enumerate(self.layers):
             lh, rh, body = mod(lh, rh, body)

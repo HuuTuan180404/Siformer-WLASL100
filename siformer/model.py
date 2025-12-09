@@ -11,7 +11,7 @@ from siformer.utils import get_sequence_list
 from typing import Optional, Union, Callable, List
 from torch.nn.modules.normalization import LayerNorm
 from siformer.decoder import DecoderLayer, PBEEDecoder
-from siformer.pre_encoder import EncoderLayer, PBEEncoder
+from siformer.my_encoder import EncoderLayer, PBEEncoder
 from siformer.attention import AttentionLayer, ProbAttention, FullAttention, CrossAttention
 from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
 
@@ -278,7 +278,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
 class SiFormer(nn.Module):
     def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
                   num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, patience = 1,
-                 seq_len = 209, device = None, IA_encoder = True, IA_decoder = False):
+                 seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
         super(SiFormer, self).__init__()
         print("Feature isolated transformer")
 
