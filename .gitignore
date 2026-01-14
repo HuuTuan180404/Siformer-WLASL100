@@ -79,7 +79,6 @@ coverage.xml
 .DS_Store
 
 # Bỏ qua dữ liệu
-out-checkpoints/
 *.xlsx
 *.csv
 *.mp4
@@ -89,6 +88,7 @@ out-checkpoints/
 *.doc
 *.docx
 *.zip
+*.rar
 TUAN_TEST/
 *.pyc
 !img-out/*.png
