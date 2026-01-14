@@ -278,9 +278,9 @@ if __name__ == '__main__':
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_com_layers=1,
+        num_com_layers=4,
         num_enc_layers =3,
-        num_dec_layers=4,
+        num_dec_layers=3,
         patience=2
     )
 
@@ -292,8 +292,6 @@ if __name__ == '__main__':
     transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) 
     train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
     
-    print(f'Tổng số hàng: {len(train_set)}')
-
     # Validation set
     val_loader = None
     if args.validation_set == "from-file":
@@ -321,10 +319,6 @@ if __name__ == '__main__':
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
                               num_workers=args.num_worker)
-
-    print(f'Train: {len(train_loader.dataset) if train_loader is not None else None}')
-    print(f'Val: {len(val_loader.dataset) if val_loader is not None else None}')
-    print(f'Test: {len(eval_loader.dataset) if eval_loader is not None else None}')
 
     for dec in [3, 2, 4, 5, 6]:
         args.num_dec_layers=dec
