@@ -93,9 +93,6 @@ def get_default_args():
 
 def train(args, train_loader=None, val_loader=None, eval_loader=None):
     # MARK: TRAINING PREPARATION AND MODULES
-    print(f'num_dec_layers: {args.num_dec_layers}, pat_dec: {args.patience}')
-    print(f'num_com_layers: {args.num_com_layers}')
-    # Initialize all the random seeds
     random.seed(args.seed)
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
@@ -261,8 +258,8 @@ def train(args, train_loader=None, val_loader=None, eval_loader=None):
         path_to_load = "out-checkpoints/" + top_result_name_top1 + '.pth'
         
         logger("\nThe top result was recorded at " + str(top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
-    logger(f'num_dec_layers: {args.num_dec_layers}, pat_dec: {args.patience}')
-    logger(f'num_com_layers: {args.num_com_layers}')
+    # logger(f'num_dec_layers: {args.num_dec_layers}, pat_dec: {args.patience}')
+    # logger(f'num_com_layers: {args.num_com_layers}')
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
@@ -278,9 +275,9 @@ if __name__ == '__main__':
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_com_layers=1,
+        num_com_layers=4,
         num_enc_layers =3,
-        num_dec_layers=4,
+        num_dec_layers=3,
         patience=2
     )
 
@@ -292,8 +289,6 @@ if __name__ == '__main__':
     transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) 
     train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
     
-    print(f'Tổng số hàng: {len(train_set)}')
-
     # Validation set
     val_loader = None
     if args.validation_set == "from-file":
@@ -302,7 +297,6 @@ if __name__ == '__main__':
                                 num_workers=args.num_worker)
     elif args.validation_set == "split-from-train":
         train_set, val_set = __balance_val_split(train_set, 0.2)
-
         val_set.transform = None
         val_set.augmentations = False
         val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
@@ -322,15 +316,7 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
                               num_workers=args.num_worker)
 
-    print(f'Train: {len(train_loader.dataset) if train_loader is not None else None}')
-    print(f'Val: {len(val_loader.dataset) if val_loader is not None else None}')
-    print(f'Test: {len(eval_loader.dataset) if eval_loader is not None else None}')
-
-    for dec in [3, 2, 4, 5, 6]:
-        args.num_dec_layers=dec
-        for com in [4, 1, 2, 3, 5, 6]:
-            args.num_com_layers=com
-            train(args, train_loader, val_loader, eval_loader)
+    train(args, train_loader, val_loader, eval_loader)
 
 
 '''

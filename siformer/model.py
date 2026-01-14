@@ -4,6 +4,7 @@ import uuid
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils import logger
 
 from torch import Tensor
 from sympy.polys.polyconfig import query
@@ -75,18 +76,15 @@ class CommunicatingEncoderLayer(nn.Module):
         self.ffn_lh = nn.Sequential(
             nn.Linear(d_model_list[0], d_ff),
             activation,
-            nn.Dropout(dropout),
             nn.Linear(d_ff, d_model_list[0])
         )
         self.ffn_rh = nn.Sequential(
             nn.Linear(d_model_list[1], d_ff), 
             activation, 
-            nn.Dropout(dropout),
             nn.Linear(d_ff, d_model_list[1]))
         self.ffn_body = nn.Sequential(
             nn.Linear(d_model_list[2], d_ff), 
             activation,
-            nn.Dropout(dropout),
             nn.Linear(d_ff, d_model_list[2]))
 
         self.norm3_lh = LayerNorm(d_model_list[0])
@@ -144,8 +142,7 @@ class CombinedEncoder(nn.Module):
                                       self_attn_list=[self.self_attn_lh, self.self_attn_rh, self.self_attn_body])
             for _ in range(num_comm_layers)
         ])
-
-        print(f'num_comm_layers = {num_comm_layers}')
+        logger(f'num_comm_layers = {num_comm_layers}')
 
         # Norm cuối mỗi stream
         self.norm_lh = LayerNorm(d_model_list[0])
@@ -203,45 +200,44 @@ class FeatureIsolatedTransformer(nn.Transformer):
         self.output_attention = output_attention
 
         def attn_layer_factory(d_model, n_heads):
-            Attn = ProbAttention if selected_attn == 'prob' else FullAttention
-            return AttentionLayer(Attn(output_attention = output_attention), d_model, n_heads, mix = False)
+            return AttentionLayer(ProbAttention(output_attention = output_attention), d_model, n_heads, mix = False)
 
         # Encoder kết hợp
-        # self.encoder = CombinedEncoder(
-        #     d_model_list = d_model_list,
-        #     nhead_list = nhead_list,
-        #     num_encoder_layers= num_encoder_layers,
-        #     num_comm_layers = num_comm_layers,
-        #     dim_feedforward = dim_feedforward,
-        #     dropout = dropout,
-        #     activation = activation,
-        #     attn_layer_factory = attn_layer_factory,
-        #     patience = patience,
-        #     inner_classifiers_config = inner_classifiers_config,
-        #     projections_config = projections_config
-        # )
+        self.encoder = CombinedEncoder(
+            d_model_list = d_model_list,
+            nhead_list = nhead_list,
+            num_encoder_layers= num_encoder_layers,
+            num_comm_layers = num_comm_layers,
+            dim_feedforward = dim_feedforward,
+            dropout = dropout,
+            activation = activation,
+            attn_layer_factory = attn_layer_factory,
+            patience = patience,
+            inner_classifiers_config = inner_classifiers_config,
+            projections_config = projections_config
+        )
 
         # ============
 
-        attn_lh = AttentionLayer(ProbAttention(), d_model_list[0], nhead_list[0], mix = False)
-        attn_rh = AttentionLayer(ProbAttention(), d_model_list[1], nhead_list[1], mix = False)
-        attn_body = AttentionLayer(ProbAttention(), d_model_list[2], nhead_list[2], mix = False)
+        # attn_lh = AttentionLayer(ProbAttention(), d_model_list[0], nhead_list[0], mix = False)
+        # attn_rh = AttentionLayer(ProbAttention(), d_model_list[1], nhead_list[1], mix = False)
+        # attn_body = AttentionLayer(ProbAttention(), d_model_list[2], nhead_list[2], mix = False)
 
-        encoder_layer = EncoderLayer(
-            self_attn_lh=attn_lh,
-            self_attn_rh=attn_rh,
-            self_attn_body=attn_body,
-            joints_list=[21, 21, 12],
-            nhead_list=nhead_list,
-            d_ff=dim_feedforward,
-            dropout=dropout,
-            activation="relu"
-        )
+        # encoder_layer = EncoderLayer(
+        #     self_attn_lh=attn_lh,
+        #     self_attn_rh=attn_rh,
+        #     self_attn_body=attn_body,
+        #     joints_list=[21, 21, 12],
+        #     nhead_list=nhead_list,
+        #     d_ff=dim_feedforward,
+        #     dropout=dropout,
+        #     activation="relu"
+        # )
 
-        self.encoder = PBEEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=num_comm_layers
-        )
+        # self.encoder = PBEEncoder(
+        #     encoder_layer=encoder_layer,
+        #     num_layers=num_comm_layers
+        # )
         # ============
 
         # --- Khởi tạo Decoder ---
@@ -260,7 +256,7 @@ class FeatureIsolatedTransformer(nn.Transformer):
                 src_is_causal: Optional[bool] = None, tgt_is_causal: Optional[bool] = None, memory_is_causal: bool = False,
                 training:bool = True, ) -> Tensor:
         
-        lh, rh, body = self.encoder(src[0], src[1], src[2])
+        lh, rh, body = self.encoder(src)
 
         # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
         full_memory = torch.cat((lh, rh, body), dim = -1) # [L, B, D_sum]

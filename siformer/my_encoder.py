@@ -5,7 +5,6 @@ from siformer.attention import AttentionLayer, ProbAttention
 # from attention import AttentionLayer, ProbAttention
 
 
-
 class EncoderLayer(nn.Module):
     def __init__(self,
                  self_attn_lh, self_attn_rh, self_attn_body,
@@ -87,7 +86,7 @@ class EncoderLayer(nn.Module):
 
     def forward(self, l_hand_x, r_hand_x, body_x):
         # INPUT: (L, B, N*C)
-        L, B, D = l_hand_x.shape
+        # L, B, D = l_hand_x.shape
 
         # --- Self-Attention => Dropout => Residual => Norm ---
         lh_self, _ = self.attention_lh(l_hand_x, l_hand_x, l_hand_x)
@@ -121,7 +120,7 @@ class PBEEncoder(nn.TransformerEncoder):
     def __init__(self, encoder_layer, num_layers, 
                  norm=None, enable_nested_tensor=False):
         super(PBEEncoder, self).__init__(encoder_layer, num_layers, norm, enable_nested_tensor)
-        print(f'Using custom PBEEncoder: num_layers= {num_layers}')
+        print(f'PBEEncoder [Communication]: {num_layers} layer(s)')
 
     def forward(self, lh, rh, body):
         # lh, rh, body: (L, B, D)
