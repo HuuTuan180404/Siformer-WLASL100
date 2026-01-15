@@ -248,9 +248,9 @@ class AttentionLayer(nn.Module):
         self.attention_scores = None
 
     def forward(self, queries, keys, values, attn_mask=None, key_padding_mask=None, need_weights=False, is_causal=None):
-        queries = queries.permute(1, 0, 2).type(dtype=torch.float32)
-        keys = keys.permute(1, 0, 2).type(dtype=torch.float32)
-        values = values.permute(1, 0, 2).type(dtype=torch.float32)
+        # queries = queries.permute(1, 0, 2).type(dtype=torch.float32)
+        # keys = keys.permute(1, 0, 2).type(dtype=torch.float32)
+        # values = values.permute(1, 0, 2).type(dtype=torch.float32)
         # print('queries', queries.shape) = [24, 204, 42]
 
         B, L, _ = queries.shape
@@ -273,7 +273,7 @@ class AttentionLayer(nn.Module):
         out = out.view(B, L, -1)
 
         out = self.out_projection(out)
-        out = out.permute(1, 0, 2).type(dtype=torch.float32)
+        # out = out.permute(1, 0, 2).type(dtype=torch.float32)
 
         # print(f"out from prob_spare attention: {out.shape}")
         return out,self.attention_scores

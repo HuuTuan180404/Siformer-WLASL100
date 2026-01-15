@@ -15,6 +15,7 @@ import matplotlib.ticker as ticker
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from siformer.model import SiFormer, SpoTer
+from siformer.medvitv2 import SLMedViTV2
 from siformer.gaussian_noise import GaussianNoise
 from datasets.czech_slr_dataset import CzechSLRDataset
 from siformer.utils import train_epoch, evaluate, evaluate_top_k
@@ -115,11 +116,7 @@ def train(args, train_loader=None, val_loader=None, eval_loader=None):
     print(device)
 
     # Construct the model
-    slr_model = SiFormer(num_classes=args.num_classes, num_hid=args.num_seq_elements, attn_type=args.attn_type,
-                            num_comm_layers=args.num_com_layers,
-                            num_enc_layers=args.num_enc_layers, num_dec_layers=args.num_dec_layers, device=device,
-                            IA_encoder=args.IA_encoder, IA_decoder=args.IA_decoder,
-                            patience=args.patience)
+    slr_model = SLMedViTV2()
 
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
     cel_criterion = nn.CrossEntropyLoss(label_smoothing=0.1)

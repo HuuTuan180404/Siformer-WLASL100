@@ -88,7 +88,6 @@ class DecoderLayer(nn.TransformerDecoderLayer):
                  activation: Union[str, Callable[[Tensor], Tensor]] = F.relu, **kwargs):
         super(DecoderLayer, self).__init__(d_model, nhead, dim_feedforward, dropout, activation)
         # Change self.multihead_attn to use Pro-sparse attention
-        print('Using custom DecoderLayer')
 
     def forward(self, tgt: torch.Tensor, memory: torch.Tensor, tgt_mask: Optional[torch.Tensor] = None,
                 memory_mask: Optional[torch.Tensor] = None, tgt_key_padding_mask: Optional[torch.Tensor] = None,
