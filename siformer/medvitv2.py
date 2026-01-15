@@ -70,7 +70,7 @@ class LocalityFeedForward(nn.Module):
         x = x.transpose(1, 2)          # [B, D, L]
 
         # pw1
-        x = self.pw1(x.transpose(1, 2))
+        x = self.pw1(x)
         x = x.transpose(1, 2)          # [B, L, hidden_dim]
         x = self.norm1(x)
 
@@ -212,7 +212,7 @@ class LGBlock(nn.Module):
 
     def forward(self, lh, rh, body):
         # lh, rh, body: (B, L, D)
-        # lh, rh, body = self.local_layer(lh, rh, body)
+        lh, rh, body = self.local_layer(lh, rh, body)
         lh, rh, body = self.global_layer(lh, rh, body)
         return lh, rh, body
 

@@ -116,7 +116,10 @@ def train(args, train_loader=None, val_loader=None, eval_loader=None):
     print(device)
 
     # Construct the model
-    slr_model = SLMedViTV2()
+    slr_model = SLMedViTV2(
+        num_medvitv2_layers=args.num_com_layers,
+        num_dec_layers=args.num_dec_layers,
+    )
 
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
     cel_criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
@@ -313,7 +316,12 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g,
                               num_workers=args.num_worker)
 
-    train(args, train_loader, val_loader, eval_loader)
+    # train(args, train_loader, val_loader, eval_loader)
+    for dec in [3, 2, 4, 5, 6]:
+        args.num_dec_layers=dec
+        for com in [4, 1, 2, 3, 5, 6]:
+            args.num_com_layers=com
+            train(args, train_loader, val_loader, eval_loader)
 
 
 '''
