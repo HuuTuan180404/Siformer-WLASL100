@@ -130,17 +130,90 @@ class LocalLayer(nn.Module):
         return l_hand_out, r_hand_out, body_out
 
 
+# class GlobalLayer(nn.Module):
+#     def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, self_attn_list: List):
+#         super().__init__()
+
+#         # attn
+#         self.self_attn_lh = self_attn_list[0]
+#         self.self_attn_rh = self_attn_list[1]
+#         self.self_attn_body = self_attn_list[2]
+
+#         # ffn
+#         self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), 
+#                                     nn.ReLU() if act == 'relu' else nn.GELU(), 
+#                                     nn.Linear(d_ff, d_model_list[0]))
+#         self.ffn_rh = nn.Sequential(nn.Linear(d_model_list[1], d_ff), 
+#                                     nn.ReLU() if act == 'relu' else nn.GELU(), 
+#                                     nn.Linear(d_ff, d_model_list[1]))
+#         self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), 
+#                                       nn.ReLU() if act == 'relu' else nn.GELU(), 
+#                                       nn.Linear(d_ff, d_model_list[2]))
+        
+#         # norm
+#         self.norm1_lh = LayerNorm(d_model_list[0])
+#         self.norm1_rh = LayerNorm(d_model_list[1])
+#         self.norm1_body = LayerNorm(d_model_list[2])
+
+#         self.norm2_lh = LayerNorm(d_model_list[0])
+#         self.norm2_rh = LayerNorm(d_model_list[1])
+#         self.norm2_body = LayerNorm(d_model_list[2])
+
+#         # dropout
+#         self.attn_dropout = nn.Dropout(dropout)
+#         self.ffn_dropout = nn.Dropout(dropout)
+
+#     def forward(self, l_hand_x, r_hand_x, body_x):
+#         # l_hand_x, r_hand_x, body_x: [B, L, D]
+
+#         # --- 1. Self-Attention ---
+#         attn_lh_out, _ = self.self_attn_lh(self.norm1_lh(l_hand_x), 
+#             self.norm1_lh(l_hand_x), self.norm1_lh(l_hand_x),
+#         )
+#         attn_rh_out, _ = self.self_attn_rh(self.norm1_rh(r_hand_x), 
+#             self.norm1_rh(r_hand_x), self.norm1_rh(r_hand_x),
+#         )
+#         attn_body_out, _ = self.self_attn_body(self.norm1_body(body_x), 
+#             self.norm1_body(body_x), self.norm1_body(body_x),
+#         )
+
+#         l_hand_x = l_hand_x + self.attn_dropout(attn_lh_out)
+#         r_hand_x = r_hand_x + self.attn_dropout(attn_rh_out)
+#         body_x = body_x + self.attn_dropout(attn_body_out)
+
+#         # --- 3. Feed-Forward Network ---
+#         l_hand_x = l_hand_x + self.ffn_dropout(self.ffn_lh(l_hand_x))
+#         r_hand_x = r_hand_x + self.ffn_dropout(self.ffn_rh(r_hand_x))
+#         body_x = body_x + self.ffn_dropout(self.ffn_body(body_x))
+
+#         return l_hand_x, r_hand_x, body_x
+
 
 class GlobalLayer(nn.Module):
     def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, self_attn_list: List):
         super().__init__()
 
-        # attn
+        # Giai đoạn 1: Self-Attention Layers
         self.self_attn_lh = self_attn_list[0]
         self.self_attn_rh = self_attn_list[1]
         self.self_attn_body = self_attn_list[2]
+        self.norm1_lh = LayerNorm(d_model_list[0])
+        self.norm1_rh = LayerNorm(d_model_list[1])
+        self.norm1_body = LayerNorm(d_model_list[2])
 
-        # ffn
+        # rh truyền cho lh
+        self.lh_from_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
+                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
+        self.rh_from_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
+                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
+
+        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
+        self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
+        self.rh_fusion_layer = nn.Linear(d_model_list[1], d_model_list[1])
+        self.norm2_lh = LayerNorm(d_model_list[0])
+        self.norm2_rh = LayerNorm(d_model_list[1])
+
+        # Giai đoạn 3: Feed-Forward Networks
         self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), 
                                     nn.ReLU() if act == 'relu' else nn.GELU(), 
                                     nn.Linear(d_ff, d_model_list[0]))
@@ -150,44 +223,82 @@ class GlobalLayer(nn.Module):
         self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), 
                                       nn.ReLU() if act == 'relu' else nn.GELU(), 
                                       nn.Linear(d_ff, d_model_list[2]))
-        
-        # norm
-        self.norm1_lh = LayerNorm(d_model_list[0])
-        self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
 
-        self.norm2_lh = LayerNorm(d_model_list[0])
-        self.norm2_rh = LayerNorm(d_model_list[1])
-        self.norm2_body = LayerNorm(d_model_list[2])
-
-        # dropout
-        self.attn_dropout = nn.Dropout(dropout)
-        self.ffn_dropout = nn.Dropout(dropout)
+        self.norm3_lh = LayerNorm(d_model_list[0])
+        self.norm3_rh = LayerNorm(d_model_list[1])
+        self.norm3_body = LayerNorm(d_model_list[2])
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, l_hand_x, r_hand_x, body_x):
         # l_hand_x, r_hand_x, body_x: [B, L, D]
 
         # --- 1. Self-Attention ---
-        attn_lh_out, _ = self.self_attn_lh(self.norm1_lh(l_hand_x), 
-            self.norm1_lh(l_hand_x), self.norm1_lh(l_hand_x),
-        )
-        attn_rh_out, _ = self.self_attn_rh(self.norm1_rh(r_hand_x), 
-            self.norm1_rh(r_hand_x), self.norm1_rh(r_hand_x),
-        )
-        attn_body_out, _ = self.self_attn_body(self.norm1_body(body_x), 
-            self.norm1_body(body_x), self.norm1_body(body_x),
-        )
+        lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x)
+        l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
 
-        l_hand_x = l_hand_x + self.attn_dropout(attn_lh_out)
-        r_hand_x = r_hand_x + self.attn_dropout(attn_rh_out)
-        body_x = body_x + self.attn_dropout(attn_body_out)
+        rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x)
+        r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
+
+        body_self, _ = self.self_attn_body(body_x, body_x, body_x)
+        body_x = self.norm1_body(body_x + self.dropout(body_self))
+
+        # --- 2. Cross-Attention ---
+        lh_from_rh, _ = self.lh_from_rh_attn(l_hand_x, r_hand_x, r_hand_x)
+        lh_fused = self.lh_fusion_layer(lh_from_rh)
+        l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
+
+        rh_from_lh, _ = self.rh_from_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
+        rh_fused = self.rh_fusion_layer(rh_from_lh)
+        r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
 
         # --- 3. Feed-Forward Network ---
-        l_hand_x = l_hand_x + self.ffn_dropout(self.ffn_lh(l_hand_x))
-        r_hand_x = r_hand_x + self.ffn_dropout(self.ffn_rh(r_hand_x))
-        body_x = body_x + self.ffn_dropout(self.ffn_body(body_x))
+        l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
+        r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
+        body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
 
-        return l_hand_x, r_hand_x, body_x
+        return [l_hand_x, r_hand_x, body_x]
+    # def forward_prenorm(self, l_hand_x, r_hand_x, body_x):
+    #     # l_hand_x, r_hand_x, body_x: [B, L, D]
+
+    #     # --- 1. Self-Attention (Pre-Norm) ---
+    #     lh_norm = self.norm1_lh(l_hand_x)
+    #     lh_self, _ = self.self_attn_lh(lh_norm, lh_norm, lh_norm)
+    #     l_hand_x = l_hand_x + self.dropout(lh_self)
+
+    #     rh_norm = self.norm1_rh(r_hand_x)
+    #     rh_self, _ = self.self_attn_rh(rh_norm, rh_norm, rh_norm)
+    #     r_hand_x = r_hand_x + self.dropout(rh_self)
+
+    #     body_norm = self.norm1_body(body_x)
+    #     body_self, _ = self.self_attn_body(body_norm, body_norm, body_norm)
+    #     body_x = body_x + self.dropout(body_self)
+
+    #     # --- 2. Cross-Attention (Pre-Norm) ---
+    #     lh_norm = self.norm2_lh(l_hand_x)
+    #     rh_norm = self.norm2_rh(r_hand_x)
+
+    #     lh_from_rh, _ = self.lh_from_rh_attn(
+    #         query=lh_norm,
+    #         key=rh_norm,
+    #         value=rh_norm
+    #     )
+    #     lh_fused = self.lh_fusion_layer(lh_from_rh)
+    #     l_hand_x = l_hand_x + self.dropout(lh_fused)
+
+    #     rh_from_lh, _ = self.rh_from_lh_attn(
+    #         query=rh_norm,
+    #         key=lh_norm,
+    #         value=lh_norm
+    #     )
+    #     rh_fused = self.rh_fusion_layer(rh_from_lh)
+    #     r_hand_x = r_hand_x + self.dropout(rh_fused)
+
+    #     # --- 3. Feed-Forward Network (Pre-Norm) ---
+    #     l_hand_x = l_hand_x + self.dropout(self.ffn_lh(self.norm3_lh(l_hand_x)))
+    #     r_hand_x = r_hand_x + self.dropout(self.ffn_rh(self.norm3_rh(r_hand_x)))
+    #     body_x   = body_x   + self.dropout(self.ffn_body(self.norm3_body(body_x)))
+
+    #     return [l_hand_x, r_hand_x, body_x]
 
 
 class LGBlock(nn.Module):
@@ -352,72 +463,3 @@ class SLMedViTV2(nn.Module):
         frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
         return frame_pos
 
-
-# class GlobalLayer(nn.Module):
-#     def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, self_attn_list: List):
-#         super().__init__()
-
-#         # Giai đoạn 1: Self-Attention Layers
-#         self.self_attn_lh = self_attn_list[0]
-#         self.self_attn_rh = self_attn_list[1]
-#         self.self_attn_body = self_attn_list[2]
-#         self.norm1_lh = LayerNorm(d_model_list[0])
-#         self.norm1_rh = LayerNorm(d_model_list[1])
-#         self.norm1_body = LayerNorm(d_model_list[2])
-
-#         # rh truyền cho lh
-#         self.lh_from_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
-#                                                    vdim=d_model_list[1], dropout=dropout, batch_first=False)
-#         self.rh_from_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
-#                                                    vdim=d_model_list[0], dropout=dropout, batch_first=False)
-
-#         # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
-#         self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
-#         self.rh_fusion_layer = nn.Linear(d_model_list[1], d_model_list[1])
-#         self.norm2_lh = LayerNorm(d_model_list[0])
-#         self.norm2_rh = LayerNorm(d_model_list[1])
-
-#         # Giai đoạn 3: Feed-Forward Networks
-#         self.ffn_lh = nn.Sequential(nn.Linear(d_model_list[0], d_ff), 
-#                                     nn.ReLU() if act == 'relu' else nn.GELU(), 
-#                                     nn.Linear(d_ff, d_model_list[0]))
-#         self.ffn_rh = nn.Sequential(nn.Linear(d_model_list[1], d_ff), 
-#                                     nn.ReLU() if act == 'relu' else nn.GELU(), 
-#                                     nn.Linear(d_ff, d_model_list[1]))
-#         self.ffn_body = nn.Sequential(nn.Linear(d_model_list[2], d_ff), 
-#                                       nn.ReLU() if act == 'relu' else nn.GELU(), 
-#                                       nn.Linear(d_ff, d_model_list[2]))
-
-#         self.norm3_lh = LayerNorm(d_model_list[0])
-#         self.norm3_rh = LayerNorm(d_model_list[1])
-#         self.norm3_body = LayerNorm(d_model_list[2])
-#         self.dropout = nn.Dropout(dropout)
-
-#     def forward(self, l_hand_x, r_hand_x, body_x):
-#         # l_hand_x, r_hand_x, body_x: [B, L, D]
-
-#         # --- 1. Self-Attention ---
-#         lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x)
-#         l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
-
-#         rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x)
-#         r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
-
-#         body_self, _ = self.self_attn_body(body_x, body_x, body_x)
-#         body_x = self.norm1_body(body_x + self.dropout(body_self))
-
-#         # --- 2. Cross-Attention ---
-#         lh_from_rh, _ = self.lh_from_rh_attn(l_hand_x, r_hand_x, r_hand_x)
-#         lh_fused = self.lh_fusion_layer(lh_from_rh)
-#         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
-
-#         rh_from_lh, _ = self.rh_from_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
-#         rh_fused = self.rh_fusion_layer(rh_from_lh)
-#         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
-
-#         # --- 3. Feed-Forward Network ---
-#         l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
-#         r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
-#         body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
-
-#         return [l_hand_x, r_hand_x, body_x]
