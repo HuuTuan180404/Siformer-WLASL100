@@ -92,7 +92,7 @@ def get_default_args():
     return parser
 
 
-def train(args, train_loader=None, val_loader=None, eval_loader=None):
+def train(args,):
     # MARK: TRAINING PREPARATION AND MODULES
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -114,6 +114,42 @@ def train(args, train_loader=None, val_loader=None, eval_loader=None):
     # Set device to CUDA only if applicable
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
+
+
+    # WLASL100
+    
+
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+
+    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) 
+    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
+    
+    # Validation set
+    val_loader = None
+    if args.validation_set == "from-file":
+        val_set = CzechSLRDataset(args.validation_set_path)
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                num_workers=args.num_worker)
+    elif args.validation_set == "split-from-train":
+        train_set, val_set = __balance_val_split(train_set, 0.2)
+        val_set.transform = None
+        val_set.augmentations = False
+        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                num_workers=args.num_worker)
+
+    # Testing set
+    eval_loader = None
+    if args.testing_set_path:
+        eval_set = CzechSLRDataset(args.testing_set_path)
+        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
+                                 num_workers=args.num_worker)
+
+    # Final training set refinements
+    if args.experimental_train_split:
+        train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
+    
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g, num_workers=args.num_worker)
 
     # Construct the model
     slr_model = SLMedViTV2(
@@ -258,15 +294,13 @@ def train(args, train_loader=None, val_loader=None, eval_loader=None):
         path_to_load = "out-checkpoints/" + top_result_name_top1 + '.pth'
         
         logger("\nThe top result was recorded at " + str(top_result_top1) + " testing accuracy. The best checkpoint is " + top_result_name_top1 + ".")
-    # logger(f'num_dec_layers: {args.num_dec_layers}, pat_dec: {args.patience}')
-    # logger(f'num_com_layers: {args.num_com_layers}')
+    logger(f'LGBlock = {args.num_com_layers}')
+    logger(f'num_dec_layers: {args.num_dec_layers} | pat_dec: {args.patience}')
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("", parents=[get_default_args()], add_help=False)
-
-    # WLASL100
     parser.set_defaults(
         experiment_name="WLASL100",
         training_set_path="datasets/WLASL100_train_25fps.csv",
@@ -275,43 +309,25 @@ if __name__ == '__main__':
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_com_layers=3,
-        num_enc_layers =3,
-        num_dec_layers=4,
+        num_com_layers=2,
+        num_enc_layers =2,
+        num_dec_layers=3,
         patience=2
     )
 
     args = parser.parse_args()
 
-    g = torch.Generator()
-    g.manual_seed(args.seed)
+    # for dec in [4]:
+    #     args.num_dec_layers=dec
+    #     for com in [5]:
+    #         args.num_com_layers=com
+    #         train(args)
 
-    transform = transforms.Compose([GaussianNoise(args.gaussian_mean, args.gaussian_std)]) 
-    train_set = CzechSLRDataset(args.training_set_path, transform=transform, augmentations=True)
+    # for dec in [5]:
+    #     args.num_dec_layers=dec
+    #     for com in [2, 3, 4, 5]:
+    #         args.num_com_layers=com
+    #         train(args)
+    train(args)
+
     
-    # Validation set
-    val_loader = None
-    if args.validation_set == "from-file":
-        val_set = CzechSLRDataset(args.validation_set_path)
-        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                num_workers=args.num_worker)
-    elif args.validation_set == "split-from-train":
-        train_set, val_set = __balance_val_split(train_set, 0.2)
-        val_set.transform = None
-        val_set.augmentations = False
-        val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                num_workers=args.num_worker)
-
-    # Testing set
-    eval_loader = None
-    if args.testing_set_path:
-        eval_set = CzechSLRDataset(args.testing_set_path)
-        eval_loader = DataLoader(eval_set, batch_size=args.batch_size, shuffle=True, generator=g,
-                                 num_workers=args.num_worker)
-
-    # Final training set refinements
-    if args.experimental_train_split:
-        train_set = __split_of_train_sequence(train_set, args.experimental_train_split)
-    
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, generator=g, num_workers=args.num_worker)
-    train(args, train_loader, val_loader, eval_loader)
