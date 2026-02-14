@@ -117,18 +117,6 @@ class LocalLayer(nn.Module):
         self.rh_lffn = LocalityFeedForward(in_dim=d_model_list[1], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
         self.body_lffn = LocalityFeedForward(in_dim=d_model_list[2], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
 
-    # def forward(self, l_hand, r_hand, body): # pre-norm
-    #     # src: [B, L, D]
-    #     l_hand_out = l_hand + self.lh_attn(self.lh_norm1(l_hand))
-    #     l_hand_out = l_hand_out + self.lh_lffn(self.lh_norm2(l_hand_out))
-
-    #     r_hand_out = r_hand + self.rh_attn(self.rh_norm1(r_hand))
-    #     r_hand_out = r_hand_out + self.rh_lffn(self.rh_norm2(r_hand_out))
-
-    #     body_out = body + self.body_attn(self.body_norm1(body))
-    #     body_out = body_out + self.body_lffn(self.body_norm2(body_out))
-    #     return l_hand_out, r_hand_out, body_out
-
     def forward(self, l_hand, r_hand, body): # post-norm
         # src: [B, L, D]
 
@@ -203,8 +191,6 @@ class GlobalLayer(nn.Module):
         # --- 2. Cross-Attention ---
         lh_from_rh, _ = self.lh_from_rh_attn(l_hand_x, r_hand_x, r_hand_x)
         rh_from_lh, _ = self.rh_from_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
-        # lh_fused = self.lh_fusion_layer(lh_from_rh)
-        # rh_fused = self.rh_fusion_layer(rh_from_lh)
         l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_from_rh))
         r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_from_lh))
 
@@ -304,7 +290,7 @@ class SLMedViTV2(nn.Module):
                                         nhead_list=nhead_list,
                                         d_ff=2048,
                                         dropout=0.1,
-                                        act=nn.ReLU())
+                                        act='gelu')
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
