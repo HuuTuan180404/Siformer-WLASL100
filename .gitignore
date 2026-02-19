@@ -92,3 +92,4 @@ coverage.xml
 TUAN_TEST/
 *.pyc
 !img-out/*.png
+*.pth
