@@ -155,6 +155,7 @@ def train(args,):
     slr_model = SLMedViTV2(
         num_medvitv2_layers=args.num_com_layers,
         num_dec_layers=args.num_dec_layers,
+        pat_dec=args.patience,
     )
 
     # Construct the other modules | Khởi tạo hàm mất mát (loss function)
@@ -297,6 +298,7 @@ def train(args,):
     logger(f'LGBlock = {args.num_com_layers}')
     logger(f'num_dec_layers: {args.num_dec_layers} | pat_dec: {args.patience}')
     logger("\nAny desired statistics have been plotted.\nThe experiment is finished.")
+    return top_result_top1
 
 
 if __name__ == '__main__':
@@ -312,22 +314,34 @@ if __name__ == '__main__':
         num_com_layers=2,
         num_enc_layers =2,
         num_dec_layers=3,
-        patience=2
+        patience=0
     )
 
     args = parser.parse_args()
 
-    # for dec in [4]:
-    #     args.num_dec_layers=dec
-    #     for com in [5]:
-    #         args.num_com_layers=com
-    #         train(args)
+    top1 = [2, 3, 0.85375]
+    top2 = [2, 3, 0]
 
-    # for dec in [5]:
-    #     args.num_dec_layers=dec
-    #     for com in [2, 3, 4, 5]:
-    #         args.num_com_layers=com
-    #         train(args)
-    train(args)
+    for enc in [3, 4, 5, 6]:
+        args.num_com_layers=enc
+        acc = train(args)
+        if acc < top2[2]:
+            continue
+        if top1[2] < acc:
+            top2 = top1
+            top1[0] = enc
+            continue
 
+        if top2[2] < acc and acc < top1[2]:
+            top2[0] = enc
+            continue
     
+    # top 1
+    args.num_com_layers=top1[0]
+    for dec in [2, 4, 5, 6]:
+        args.num_dec_layers=dec
+        acc = train(args)
+        if top1[2] < acc:
+            top1[1] = dec
+            top1[2] = acc
+
