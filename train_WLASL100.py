@@ -115,10 +115,6 @@ def train(args,):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(device)
 
-
-    # WLASL100
-    
-
     g = torch.Generator()
     g.manual_seed(args.seed)
 
@@ -256,7 +252,7 @@ def train(args,):
 
     if eval_loader:
         logger("\nTesting checkpointed models starting...\n")
-        for i in [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]:
+        for i in [11, 10, 9, 8, 7, 6]:
             for checkpoint_id in ["t", "v"]:
                 path_to_load = "out-checkpoints/" + args.experiment_name + "/checkpoint_" + checkpoint_id + "_" + str(i) + ".pth"
 
