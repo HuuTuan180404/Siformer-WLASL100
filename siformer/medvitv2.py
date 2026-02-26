@@ -299,6 +299,9 @@ class SLMedViTV2(nn.Module):
                                         d_ff=2048,
                                         dropout=0.1,
                                         act='gelu')
+        
+        self.norm = nn.LayerNorm(self.d_model)
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
 
         self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
@@ -313,6 +316,7 @@ class SLMedViTV2(nn.Module):
 
     def decoder_block(self, target, full_memory, training):
         decoder_out = self.decoder(target, full_memory, training)
+        # print(f'decoder_out.shape = {decoder_out.shape}') (1, 24, 108)
         return decoder_out
 
     def forward(self, l_hand, r_hand, body):
@@ -341,17 +345,21 @@ class SLMedViTV2(nn.Module):
 
         # encoder: medvitv2 (B, L, D)
         l_hand_out, r_hand_out, body_out = self.encoder_block(l_hand_in, r_hand_in, body_in)
-
-        # 
         full_memory = torch.cat((l_hand_out, r_hand_out, body_out), dim = -1) # [B, L, D_sum]
-        full_memory = full_memory.permute(1, 0, 2) # [L, B, D_sum]
 
-        # decoder
-        decoder_out = self.decoder_block(self.class_query.repeat(1, batch_size, 1), full_memory,
-                                         training=training)
-        # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(decoder_out).squeeze(0)
+        out = self.norm(full_memory) # [B, L, D_sum]
+        out = out.permute(0, 2, 1) # [B, D_sum, L]
+        out = self.avgpool(out) # [B, D_sum, 1]
+        out = torch.flatten(out, start_dim = 1) # [B, D_sum]
+        out = self.projection(out) # [B, D_sum] -> # [B, num_classes]
         return out
+
+        # full_memory = full_memory.permute(1, 0, 2) # [L, B, D_sum]
+        # decoder
+        # decoder_out = self.decoder_block(self.class_query.repeat(1, batch_size, 1), full_memory, training=training)
+        # out = self.projection(decoder_out).squeeze(0) # (1, batch_size, feature_size) -> (batch_size, num_class): (24, 100)
+
+
 
     def get_custom_decoder(self, nhead):
         decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
@@ -374,6 +382,7 @@ class SLMedViTV2(nn.Module):
 
 
 class AbsolutePE(nn.Module):
+
     def __init__(self, d_model, dropout=0.1, max_len=204, scale_factor=1.0):
         super(AbsolutePE, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
