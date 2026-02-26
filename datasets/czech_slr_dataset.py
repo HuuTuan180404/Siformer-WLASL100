@@ -72,10 +72,8 @@ def load_dataset(file_location: str, num_remove=0, remove_from=None):
 
         data.append(current_row)
     
-    data_np = np.array(data)
-    mask_padding = np.sum(np.abs(data_np), axis=(2,3)) == 0
     # data.shape = 3200, 204, 21, 2 = hand
-    return data, labels, mask_padding
+    return data, labels
 
 
 def tensor_to_dictionary(landmarks_tensor: torch.Tensor) -> dict:
@@ -188,7 +186,6 @@ class CzechSLRDataset(torch_data.Dataset):
 
     data: [np.ndarray]
     labels: [np.ndarray]
-    mask_padding: [np.ndarray]
 
     def __init__(self, dataset_filename: str, num_labels=5, transform=None, augmentations=False,
                  augmentations_prob=0.5, normalize=True, num_remove=0, remove_from=None):
@@ -200,11 +197,10 @@ class CzechSLRDataset(torch_data.Dataset):
         """
 
         loaded_data = load_dataset(file_location=dataset_filename, num_remove=num_remove, remove_from=remove_from)
-        data, labels, mask_padding = loaded_data[0], loaded_data[1], loaded_data[2]
+        data, labels = loaded_data[0], loaded_data[1]
 
         self.data = data
         self.labels = labels
-        self.mask_padding = mask_padding
         self.targets = list(labels)
         self.num_labels = num_labels
         self.transform = transform
@@ -223,7 +219,6 @@ class CzechSLRDataset(torch_data.Dataset):
 
         depth_map = torch.from_numpy(np.copy(self.data[idx]))
         label = torch.Tensor([self.labels[idx]])
-        mask_padding = torch.from_numpy(np.copy(self.mask_padding[idx]))
 
         depth_map = tensor_to_dictionary(depth_map)
 
@@ -264,7 +259,7 @@ class CzechSLRDataset(torch_data.Dataset):
             r_hand_depth_map = self.transform(r_hand_depth_map)  # (B, 204, 21, 2)
             body_depth_map = self.transform(body_depth_map)  # (B, 204, 12, 2)
 
-        return l_hand_depth_map, r_hand_depth_map, body_depth_map, label, mask_padding
+        return l_hand_depth_map, r_hand_depth_map, body_depth_map, label
 
     def __len__(self):
         return len(self.labels)

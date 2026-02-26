@@ -14,13 +14,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
     model.train()
     
     for i, data in enumerate(dataloader):
-        l_hands, r_hands, bodies, labels, mask_padding = data
+        l_hands, r_hands, bodies, labels = data
 
         l_hands = l_hands.to(device)
         r_hands = r_hands.to(device)
         bodies = bodies.to(device)
         labels = labels.to(device, dtype=torch.long)
-        mask_padding = mask_padding.to(device, dtype=torch.bool)
 
         optimizer.zero_grad()
         start_time = time.time()

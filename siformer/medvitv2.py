@@ -26,7 +26,7 @@ class LocalSelfAttention(nn.Module):
             d_model, nhead, dropout=dropout, batch_first=True
         )
 
-    def forward(self, x, mask_padding=None):
+    def forward(self, x):
         # x: [B, L, D]
         B, L, D = x.shape
         w = self.window_size
@@ -64,7 +64,7 @@ class LocalityFeedForward(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask_padding=None):
+    def forward(self, x):
         # x: [B, L, D]
         residual = x
         x = x.transpose(1, 2)          # [B, D, L]
@@ -117,7 +117,7 @@ class LocalLayer(nn.Module):
         self.rh_lffn = LocalityFeedForward(in_dim=d_model_list[1], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
         self.body_lffn = LocalityFeedForward(in_dim=d_model_list[2], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
 
-    def forward(self, l_hand, r_hand, body, mask_padding=None): # post-norm
+    def forward(self, l_hand, r_hand, body): # post-norm
         # src: [B, L, D]
 
         # Left hand
@@ -183,7 +183,7 @@ class GlobalLayer(nn.Module):
         self.norm3_body = LayerNorm(d_model_list[2])
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, l_hand_x, r_hand_x, body_x, mask_padding=None): # post-norm
+    def forward(self, l_hand_x, r_hand_x, body_x): # post-norm
         # l_hand_x, r_hand_x, body_x: [B, L, D]
 
         # --- 1. Self-Attention ---
@@ -230,7 +230,7 @@ class LGBlock(nn.Module):
             self_attn_list=self_attn_list
         )
 
-    def forward(self, lh, rh, body, mask_padding=None):
+    def forward(self, lh, rh, body):
         # lh, rh, body: (B, L, D)
         lh, rh, body = self.local_layer(lh, rh, body)
         lh, rh, body = self.global_layer(lh, rh, body)
@@ -267,7 +267,7 @@ class CombinedLayer(nn.Module):
         ])
         logger(f'LGBlock = {num_layers}')
 
-    def forward(self, l_hand, r_hand, body, mask_padding=None):
+    def forward(self, l_hand, r_hand, body):
         # l_hand, r_hand, body: [B, L, D]
         for layer in self.layers:
             l_hand, r_hand, body = layer(l_hand, r_hand, body)
@@ -315,7 +315,7 @@ class SLMedViTV2(nn.Module):
         decoder_out = self.decoder(target, full_memory, training)
         return decoder_out
 
-    def forward(self, l_hand, r_hand, body, mask_padding=None):
+    def forward(self, l_hand, r_hand, body):
         batch_size = l_hand.size(0)
         training = self.training
 
