@@ -138,7 +138,7 @@ class FullAttention(nn.Module):
 
 
 class ProbAttention(nn.Module):
-    def __init__(self, mask_flag=False, factor=5, scale=None, attention_dropout=0.1, output_attention=True):
+    def __init__(self, mask_flag=False, factor=5, scale=None, attention_dropout=0., output_attention=True):
         super(ProbAttention, self).__init__()
         self.factor = factor
         self.scale = scale
@@ -188,10 +188,10 @@ class ProbAttention(nn.Module):
             scores.masked_fill_(attn_mask.mask, -np.inf)
 
         attn = torch.softmax(scores, dim=-1)  # nn.Softmax(dim=-1)(scores)
+        attn = self.dropout(attn)
 
-        context_in[torch.arange(B)[:, None, None],
-        torch.arange(H)[None, :, None],
-        index, :] = torch.matmul(attn, V).type_as(context_in)
+        context_in[torch.arange(B)[:, None, None], torch.arange(H)[None, :, None], index, :] = torch.matmul(attn, V).type_as(context_in)
+
         if self.output_attention:
             attns = (torch.ones([B, H, L_V, L_V]) / L_V).type_as(attn).to(attn.device)
             attns[torch.arange(B)[:, None, None], torch.arange(H)[None, :, None], index, :] = attn
@@ -276,7 +276,7 @@ class AttentionLayer(nn.Module):
         # out = out.permute(1, 0, 2).type(dtype=torch.float32)
 
         # print(f"out from prob_spare attention: {out.shape}")
-        return out,self.attention_scores
+        return out, self.attention_scores
 
 #    The reference for the code is the following
 #    Title: Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting
