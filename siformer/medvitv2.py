@@ -17,13 +17,16 @@ from utils import logger
 
 import uuid
 
+def prob_attention(d_model, n_heads, dropout=0.):
+    return AttentionLayer(ProbAttention(attention_dropout=dropout , output_attention = True), d_model, n_heads, mix = False)
+
 
 class LocalSelfAttention(nn.Module):
     def __init__(self, d_model, nhead, window_size=12, dropout=0.1):
         super().__init__()
         self.window_size = window_size
         self.attn = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout, batch_first=True
+            d_model, nhead, batch_first=True
         )
 
     def forward(self, x):
@@ -136,30 +139,21 @@ class LocalLayer(nn.Module):
 
 
 class GlobalLayer(nn.Module):
-    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, self_attn_list: List):
+    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, shared_self_attn_list, shared_cross_attn_list=None):
         super().__init__()
 
         # Giai đoạn 1: Self-Attention Layers
-        # self.self_attn_lh = self_attn_list[0]
-        # self.self_attn_rh = self_attn_list[1]
-        # self.self_attn_body = self_attn_list[2]
-
-        self.self_attn_lh = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[0],
-                                                   vdim=d_model_list[0], batch_first=True)
-        self.self_attn_rh = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[1],
-                                                   vdim=d_model_list[1], batch_first=True)
-        self.self_attn_body = nn.MultiheadAttention(d_model_list[2], nhead_list[2], kdim=d_model_list[2],
-                                                   vdim=d_model_list[2], batch_first=True)
+        self.self_attn_lh = shared_self_attn_list[0]
+        self.self_attn_rh = shared_self_attn_list[1]
+        self.self_attn_body = shared_self_attn_list[2]
 
         self.norm1_lh = LayerNorm(d_model_list[0])
         self.norm1_rh = LayerNorm(d_model_list[1])
         self.norm1_body = LayerNorm(d_model_list[2])
 
-        # rh truyền cho lh
-        self.lh_from_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
-                                                   vdim=d_model_list[1], batch_first=True)
-        self.rh_from_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
-                                                   vdim=d_model_list[0], batch_first=True)
+        # cross-attention
+        self.lh_from_rh_attn = shared_cross_attn_list[0]
+        self.rh_from_lh_attn = shared_cross_attn_list[1]
 
         # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
         self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
@@ -207,12 +201,11 @@ class GlobalLayer(nn.Module):
         r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
         body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
 
-        return [l_hand_x, r_hand_x, body_x]
+        return l_hand_x, r_hand_x, body_x
 
 
 class LGBlock(nn.Module):
-    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, 
-                 self_attn_list):
+    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act, shared_self_attn_list, shared_cross_attn_list=None):
         super().__init__()
         self.local_layer = LocalLayer(
             d_model_list=d_model_list,
@@ -227,7 +220,8 @@ class LGBlock(nn.Module):
             d_ff=d_ff,
             dropout=dropout,
             act=act,
-            self_attn_list=self_attn_list
+            shared_self_attn_list=shared_self_attn_list,
+            shared_cross_attn_list=shared_cross_attn_list
         )
 
     def forward(self, lh, rh, body):
@@ -246,9 +240,16 @@ class CombinedLayer(nn.Module):
             return AttentionLayer(ProbAttention(output_attention = True), d_model, n_heads, mix = False)
 
         # define for global layer
+        # shared self attention
         self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
         self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
-        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])         
+        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2]) 
+
+        # shared cross-attention
+        # self.lh_from_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1], vdim=d_model_list[1], batch_first=True)
+        # self.rh_from_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0], vdim=d_model_list[0], batch_first=True)
+        self.lh_from_rh_attn = attn_layer_factory(d_model_list[0], nhead_list[0])
+        self.rh_from_lh_attn = attn_layer_factory(d_model_list[1], nhead_list[1])
 
         self.layers = nn.ModuleList([
             LGBlock(
@@ -257,10 +258,14 @@ class CombinedLayer(nn.Module):
                 d_ff=d_ff,
                 dropout=dropout,
                 act=act,
-                self_attn_list=[
+                shared_self_attn_list=[
                     self.self_attn_lh,
                     self.self_attn_rh,
                     self.self_attn_body
+                ],
+                shared_cross_attn_list=[
+                    self.lh_from_rh_attn,
+                    self.rh_from_lh_attn
                 ]
             )
             for _ in range(num_layers)
