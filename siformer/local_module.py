@@ -1,108 +1,83 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from siformer.utils_module import *
 
-class LSTMCell(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+
+class Stream1(nn.Module):
+    def __init__(self, d_model, n_heads, d_ff, attn=None, act=None, dropout=0.):
         super().__init__()
-        self.hidden_dim = hidden_dim
 
-        # input -> hidden
-        self.W_i = nn.Linear(input_dim, hidden_dim)
-        self.W_f = nn.Linear(input_dim, hidden_dim)
-        self.W_o = nn.Linear(input_dim, hidden_dim)
-        self.W_g = nn.Linear(input_dim, hidden_dim)
+        self.attn = prob_attention_factory(d_model, n_heads, dropout) if attn is None else attn
 
-        # hidden -> hidden
-        self.U_i = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.U_f = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.U_o = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.U_g = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x_t, h_prev, c_prev):
-
-        i = torch.sigmoid(self.W_i(x_t) + self.U_i(h_prev))
-        f = torch.sigmoid(self.W_f(x_t) + self.U_f(h_prev))
-        o = torch.sigmoid(self.W_o(x_t) + self.U_o(h_prev))
-        g = torch.tanh(self.W_g(x_t) + self.U_g(h_prev))
-
-        c_t = f * c_prev + i * g # (batch, hidden_dim)
-        h_t = o * torch.tanh(c_t) # (batch, hidden_dim)
-
-        return h_t, c_t
-
-
-class LSTMLayer(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.cell = LSTMCell(input_dim, hidden_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU() if act == 'relu' else nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model),
+        )
 
     def forward(self, x):
-        # x: (batch, seq_len, input_dim)
-        batch_size, seq_len, _ = x.size()
+        # x: [B, L, D]
 
-        h = torch.zeros(batch_size, self.hidden_dim, device=x.device)
-        c = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        attn_out, _ = self.attn(x, x, x)
+        x = self.norm1(x + self.dropout(attn_out))
 
-        outputs = []
-        for t in range(seq_len):
-            x_t = x[:, t, :]
-            h, c = self.cell(x_t, h, c)
-            outputs.append(h.unsqueeze(1))
+        ffn_out = self.ffn(x)
+        x = x + self.dropout(ffn_out)
 
-        outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden_dim)
+        return self.norm2(x)
 
-        return outputs
-
-
-class BiLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim=None):
+class Stream(nn.Module):
+    def __init__(self, d_model, n_heads, d_ff, attn=None, act=None, dropout=0.):
         super().__init__()
 
-        output_dim = input_dim if output_dim is None else output_dim
+        self.attn = prob_attention_factory(d_model, n_heads, dropout) if attn is None else attn
 
-        self.forward_lstm = LSTMLayer(input_dim, hidden_dim)
-        self.backward_lstm = LSTMLayer(input_dim, hidden_dim)
-
-        self.fc = nn.Linear(hidden_dim * 2, output_dim)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+        self.activation = F.relu if act == "relu" else F.gelu
 
     def forward(self, x):
-        # x: (batch, seq_len, input_ dim)
+        # x: [B, L, D]
 
-        # Forward direction
-        out_forward = self.forward_lstm(x)
+        attn_out, _ = self.attn(x, x, x) # (B, L, D)
+        y = x = self.norm1(x + self.dropout(attn_out))
 
-        # Backward direction (reverse sequence)
-        x_reversed = torch.flip(x, dims=[1])
-        out_backward = self.backward_lstm(x_reversed)
-        out_backward = torch.flip(out_backward, dims=[1])
+        y = self.dropout(self.activation(self.conv1(y.transpose(1, 2))))
+        y = self.dropout(self.conv2(y).transpose(1, 2))
 
-        # Concat forward + backward
-        out = torch.cat([out_forward, out_backward], dim=2)
-        # (batch, seq_len, hidden_dim*2)
-
-        output = self.fc(out)
-        # (batch, seq_len, output_dim)
-
-        return output
-
+        return self.norm2(x+y)
 
 class LocalLayer(nn.Module):
-    def __init__(self, d_model_list, hidden_dim):
+    def __init__(self, d_model_list, n_heads_list, d_ff, attn_list=None, act=None, dropout=0.):
         super().__init__()
-        self.l_hand = BiLSTM(d_model_list[0], hidden_dim)
-        self.r_hand = BiLSTM(d_model_list[1], hidden_dim)
-        self.body = BiLSTM(d_model_list[2], hidden_dim)
 
-    def forward(self, lh, rh, bd):
+        if attn_list is None: # self-attention
+            self.lh = Stream(d_model_list[0], n_heads_list[0], d_ff, None, act, dropout)
+            self.rh = Stream(d_model_list[1], n_heads_list[1], d_ff, None, act, dropout)
+            self.body = Stream(d_model_list[2], n_heads_list[2], d_ff, None, act, dropout)
+        else: # shared attention
+            self.lh = Stream(d_model_list[0], n_heads_list[0], d_ff, attn_list[0], act, dropout)
+            self.rh = Stream(d_model_list[1], n_heads_list[1], d_ff, attn_list[1], act, dropout)
+            self.body = Stream(d_model_list[2], n_heads_list[2], d_ff, attn_list[2], act, dropout)
+
+    def forward(self, lh, rh, body):
         # src: [B, L, D]
 
-        lh = self.l_hand(lh)
-        rh = self.r_hand(rh)
-        bd = self.body(bd)
+        lh = self.lh(lh)
+        rh = self.rh(rh)
+        body = self.body(body)
 
-        return lh, rh, bd
+        return lh, rh, body
+
 
 if __name__ == '__main__':
     batch_size = 24

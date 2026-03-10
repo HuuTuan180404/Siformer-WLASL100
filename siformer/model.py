@@ -1,332 +1,150 @@
-import copy
-import math
-import uuid
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from utils import logger
-
-from torch import Tensor
-from sympy.polys.polyconfig import query
-from siformer.utils import get_sequence_list
-from typing import Optional, Union, Callable, List
+from siformer.local_module import LocalLayer
+from siformer.global_module import GlobalLayer
 from torch.nn.modules.normalization import LayerNorm
 from siformer.decoder import DecoderLayer, PBEEDecoder
-from siformer.my_encoder import EncoderLayer, PBEEncoder
-from siformer.attention import AttentionLayer, ProbAttention, FullAttention, CrossAttention
-from torch.nn.modules.transformer import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder
+from siformer.attention import AttentionLayer, ProbAttention
 
 
-def _get_clones(mod, n):
-    return nn.ModuleList([copy.deepcopy(mod) for _ in range(n)])
+def prob_attention_factory(d_model, n_heads, dropout=0.):
+    return AttentionLayer(ProbAttention(attention_dropout=dropout , output_attention = True), d_model, n_heads, mix = False)
 
 
-class PerStreamPBE(nn.Module):
-    """ PBEEncoder cho từng stream riêng. """
-    def __init__(self, d_model: int, nhead: int, num_layers: int, dim_feedforward: int, dropout: float,
-                 activation: nn.Module, enc_attn, # AttentionLayer(...)
-                 patience: int = 1, inner_classifiers_config: List[int] = None,
-                 projections_config: List[int] = None):
+def multi_head_attention_factory(d_model, n_heads, dropout=0.):
+    return nn.MultiheadAttention(d_model, n_heads, dropout=dropout)
+
+
+class LGBlock(nn.Module):
+    def __init__(self, d_model_list, n_heads_list, d_ff, dropout, act, local_attn_type=None, global_attn_type=None, num_layers=0):
         super().__init__()
+
+        assert num_layers > 0, "num_layers must be greater than 0"
+        assert global_attn_type in ['self', 'shared'], "global_attn_type must be 'self' or 'shared'"
+
+        local_attn = None
+        if local_attn_type == 'shared':
+            lh_local_attn = prob_attention_factory(d_model_list[0], n_heads_list[0], dropout)
+            rh_local_attn = prob_attention_factory(d_model_list[1], n_heads_list[1], dropout)
+            body_local_attn = prob_attention_factory(d_model_list[2], n_heads_list[2], dropout)
+            local_attn = [lh_local_attn, rh_local_attn, body_local_attn]
+
+        # global_attn = None
+        # if global_attn_type == 'shared':
+        #     global_attn = prob_attention_factory(sum(d_model_list), n_heads_list[-1], dropout)
         
-        encoder_layer = EncoderLayer(attention = enc_attn, d_model = d_model,
-                                     d_ff = dim_feedforward, dropout = dropout,
-                                     activation = "relu" if isinstance(activation, nn.ReLU) else "gelu")
+        layers = []
+        print(f'{num_layers} local layers')
+        for i in range(num_layers):
+            layers.append(
+                LocalLayer(
+                    d_model_list=d_model_list,
+                    n_heads_list=n_heads_list,
+                    d_ff=d_ff,
+                    attn_list=local_attn,
+                    act=act,
+                    dropout=dropout
+                )
+            )
 
-        self.encoder = PBEEncoder(encoder_layer = encoder_layer, num_layers = num_layers,
-                                  norm = nn.LayerNorm(d_model), patience = patience,
-                                  inner_classifiers_config = inner_classifiers_config,
-                                  projections_config = projections_config)
-
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None,
-                key_padding_mask: Optional[Tensor] = None,
-                training: bool = True) -> Tensor:
-        # x: [L, B, D_stream]
-        return self.encoder(x, mask = mask, src_key_padding_mask = key_padding_mask, training = training)
-
-
-class CommunicatingEncoderLayer(nn.Module):
-    def __init__(self, d_model_list, nhead_list, d_ff, dropout, 
-                 activation, self_attn_list: List):
-        super().__init__()
-
-        # Giai đoạn 1: Self-Attention Layers
-        self.self_attn_lh = self_attn_list[0]
-        self.self_attn_rh = self_attn_list[1]
-        self.self_attn_body = self_attn_list[2]
-        self.norm1_lh = LayerNorm(d_model_list[0])
-        self.norm1_rh = LayerNorm(d_model_list[1])
-        self.norm1_body = LayerNorm(d_model_list[2])
-
-        # rh truyền cho lh
-        self.lh_to_rh_attn = nn.MultiheadAttention(d_model_list[0], nhead_list[0], kdim=d_model_list[1],
-                                                   vdim=d_model_list[1], dropout=dropout, batch_first=False)
-
-        # lh truyền cho rh
-        self.rh_to_lh_attn = nn.MultiheadAttention(d_model_list[1], nhead_list[1], kdim=d_model_list[0],
-                                                   vdim=d_model_list[0], dropout=dropout, batch_first=False)
-
-        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
-        self.lh_fusion_layer = nn.Linear(d_model_list[0], d_model_list[0])
-        self.rh_fusion_layer = nn.Linear(d_model_list[1], d_model_list[1])
-        self.norm2_lh = LayerNorm(d_model_list[0])
-        self.norm2_rh = LayerNorm(d_model_list[1])
-
-        # Giai đoạn 3: Feed-Forward Networks
-        self.ffn_lh = nn.Sequential(
-            nn.Linear(d_model_list[0], d_ff),
-            activation,
-            nn.Linear(d_ff, d_model_list[0])
+        layers.append(
+            GlobalLayer(
+                d_model_list=d_model_list,
+                hidden_dim=512,
+            )
         )
-        self.ffn_rh = nn.Sequential(
-            nn.Linear(d_model_list[1], d_ff), 
-            activation, 
-            nn.Linear(d_ff, d_model_list[1]))
-        self.ffn_body = nn.Sequential(
-            nn.Linear(d_model_list[2], d_ff), 
-            activation,
-            nn.Linear(d_ff, d_model_list[2]))
+        
+        self.layers = nn.ModuleList(layers)
 
-        self.norm3_lh = LayerNorm(d_model_list[0])
-        self.norm3_rh = LayerNorm(d_model_list[1])
-        self.norm3_body = LayerNorm(d_model_list[2])
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, src_list, src_mask = None, src_key_padding_mask = None):
-        l_hand_x, r_hand_x, body_x = src_list[0], src_list[1], src_list[2]
-
-        # --- 1. Self-Attention ---
-        lh_self, _ = self.self_attn_lh(l_hand_x, l_hand_x, l_hand_x, attn_mask = src_mask, key_padding_mask = src_key_padding_mask)
-        l_hand_x = self.norm1_lh(l_hand_x + self.dropout(lh_self))
-
-        rh_self, _ = self.self_attn_rh(r_hand_x, r_hand_x, r_hand_x, attn_mask = src_mask, key_padding_mask = src_key_padding_mask)
-        r_hand_x = self.norm1_rh(r_hand_x + self.dropout(rh_self))
-
-        body_self, _ = self.self_attn_body(body_x, body_x, body_x, attn_mask = src_mask, key_padding_mask = src_key_padding_mask)
-        body_x = self.norm1_body(body_x + self.dropout(body_self))
-
-        lh_from_rh, _ = self.lh_to_rh_attn(l_hand_x, r_hand_x, r_hand_x)
-        lh_fused = self.lh_fusion_layer(lh_from_rh)
-        l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_fused))
-
-        rh_from_lh, _ = self.rh_to_lh_attn(query=r_hand_x,key= l_hand_x, value=l_hand_x)
-        rh_fused = self.rh_fusion_layer(rh_from_lh)
-        r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_fused))
-
-        # --- 3. Feed-Forward Network ---
-        l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
-        r_hand_x = self.norm3_rh(r_hand_x + self.dropout(self.ffn_rh(r_hand_x)))
-        body_x = self.norm3_body(body_x + self.dropout(self.ffn_body(body_x)))
-
-        return [l_hand_x, r_hand_x, body_x]
+    def forward(self, lh, rh, body):
+        # lh, rh, body: (B, L, D)
+        for layer in self.layers:
+            lh, rh, body = layer(lh, rh, body)
+        return lh, rh, body
 
 
-class CombinedEncoder(nn.Module):
-    def __init__(self, d_model_list: List[int], nhead_list: List[int],
-                 num_encoder_layers: int, num_comm_layers: int,
-                 dim_feedforward: int, dropout: float,
-                 activation: nn.Module, attn_layer_factory, patience: int = 1,
-                 inner_classifiers_config: List[int] = None,
-                 projections_config: List[int] = None):
-        super().__init__()
-
-        # Giai đoạn 1: Self-Attention Layers
-        self.self_attn_lh = attn_layer_factory(d_model_list[0], nhead_list[0])
-        self.self_attn_rh = attn_layer_factory(d_model_list[1], nhead_list[1])
-        self.self_attn_body = attn_layer_factory(d_model_list[2], nhead_list[2])
-
-        # 2) Communicating stack
-        self.comm_layers = nn.ModuleList([
-            CommunicatingEncoderLayer(d_model_list=d_model_list, nhead_list=nhead_list, 
-                                      d_ff=dim_feedforward, dropout=dropout, activation=activation, 
-                                      self_attn_list=[self.self_attn_lh, self.self_attn_rh, self.self_attn_body])
-            for _ in range(num_comm_layers)
-        ])
-        logger(f'num_comm_layers = {num_comm_layers}')
-
-        # Norm cuối mỗi stream
-        self.norm_lh = LayerNorm(d_model_list[0])
-        self.norm_rh = LayerNorm(d_model_list[1])
-        self.norm_body = LayerNorm(d_model_list[2])
-
-    def forward(self, src_list: List[Tensor], src_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None, training: bool = True) -> List[Tensor]:
-        l_hand_x, r_hand_x, body_x = src_list  # [L, B, D_i]
-
-        # 2) Communicating stack
-        feats = [l_hand_x, r_hand_x, body_x]
-        for layer in self.comm_layers:
-            feats = layer(feats, src_mask = src_mask, src_key_padding_mask = src_key_padding_mask)
-
-        # Norm cuối
-        feats[0] = self.norm_lh(feats[0])
-        feats[1] = self.norm_rh(feats[1])
-        feats[2] = self.norm_body(feats[2])
-        return feats  # [LH, RH, Body] đã fused
-
-
-class FeatureIsolatedTransformer(nn.Transformer):
-    def __init__(self, d_model_list: list, nhead_list: list,
-                 num_comm_layers: int,
-                 num_encoder_layers: int, num_decoder_layers: int,
-                 dim_feedforward: int = 2048, dropout: float = 0.1,
-                 activation: nn.Module = nn.ReLU(),
-                 selected_attn: str = 'prob', output_attention: str = True,
-                 inner_classifiers_config: list = None, patience: int = 1, 
-                 use_pyramid_encoder: bool = False,
-                 distil: bool = False, projections_config: list = None,
-                 IA_encoder: bool = False, IA_decoder: bool = False, 
-                 device = None):  # Dùng **kwargs cho các tham số không dùng đến
-
-        super(FeatureIsolatedTransformer, self).__init__(sum(d_model_list), nhead_list[-1], num_encoder_layers,
-                                                         num_decoder_layers, dim_feedforward, dropout, activation)
-        del self.encoder
+class MyModel(nn.Module):
+    def __init__(self, num_classes=100, num_hid=108, d_model_list=[42, 42, 24], 
+                 n_heads_list=[3, 3, 2, 9], 
+                  num_enc_layers = 4, num_dec_layers = 3, pat_dec = 2,
+                 seq_len = 204, device = None):
+        super(MyModel, self).__init__()
 
         self.d_model = sum(d_model_list)
-        self.d_ff =  dim_feedforward
-        self.dropout = dropout
-        self.num_encoder_layers = num_encoder_layers
-        self.num_decoder_layers = num_decoder_layers
-        self.device = device
-        self.use_pyramid_encoder = use_pyramid_encoder
-        self.use_IA_encoder = IA_encoder
-        self.use_IA_decoder = IA_decoder
-        self.inner_classifiers_config = inner_classifiers_config
-        self.projections_config = projections_config
-        self.patience = patience
-        self.distil = distil
-        self.activation = activation
-        self.selected_attn = selected_attn
-        self.output_attention = output_attention
+        self.num_decoder_layers = num_dec_layers
+        self.pat_dec = pat_dec
+        self.inner_classifiers_config = [num_hid, num_classes]
+        self.d_ff = 2048
 
-        def attn_layer_factory(d_model, n_heads):
-            return AttentionLayer(ProbAttention(output_attention = output_attention), d_model, n_heads, mix = False)
+        # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
+        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
+        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42))
+        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 24))
 
-        # Encoder kết hợp
-        self.encoder = CombinedEncoder(
-            d_model_list = d_model_list,
-            nhead_list = nhead_list,
-            num_encoder_layers= num_encoder_layers,
-            num_comm_layers = num_comm_layers,
-            dim_feedforward = dim_feedforward,
-            dropout = dropout,
-            activation = activation,
-            attn_layer_factory = attn_layer_factory,
-            patience = patience,
-            inner_classifiers_config = inner_classifiers_config,
-            projections_config = projections_config
+        # self.encoder
+        self.encoder = LGBlock(
+            d_model_list=d_model_list,
+            n_heads_list=n_heads_list,
+            d_ff=2048,
+            dropout=0.1,
+            act='gelu',
+            local_attn_type = 'shared',
+            global_attn_type='self',
+            num_layers=num_enc_layers,
         )
 
-        # ============
+        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
 
-        # attn_lh = AttentionLayer(ProbAttention(), d_model_list[0], nhead_list[0], mix = False)
-        # attn_rh = AttentionLayer(ProbAttention(), d_model_list[1], nhead_list[1], mix = False)
-        # attn_body = AttentionLayer(ProbAttention(), d_model_list[2], nhead_list[2], mix = False)
+        self.decoder = self.get_custom_decoder(n_heads_list[-1])
 
-        # encoder_layer = EncoderLayer(
-        #     self_attn_lh=attn_lh,
-        #     self_attn_rh=attn_rh,
-        #     self_attn_body=attn_body,
-        #     joints_list=[21, 21, 12],
-        #     nhead_list=nhead_list,
-        #     d_ff=dim_feedforward,
-        #     dropout=dropout,
-        #     activation="relu"
-        # )
+        self.projection = nn.Linear(num_hid, num_classes)
 
-        # self.encoder = PBEEncoder(
-        #     encoder_layer=encoder_layer,
-        #     num_layers=num_comm_layers
-        # )
-        # ============
+    def forward(self, l_hand, r_hand, body):
+        batch_size = l_hand.size(0)
+        training = self.training
 
-        # --- Khởi tạo Decoder ---
-        self.decoder = self.get_custom_decoder(nhead_list[-1])
+        # (B, L, respected_feature_size, coordinates): (24, 204, 54, 2)
+        # -> (B, L, D):  (24, 204, 108)
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1)
+        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1)
+        new_body = body.view(body.size(0), body.size(1), -1)
+
+        # (B, L, D) -> (L, B, D): (24, 204, 108) -> (204, 24, 108)
+        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype = torch.float32)
+        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype = torch.float32)
+        new_body = new_body.permute(1, 0, 2).type(dtype = torch.float32)
+
+        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
+        r_hand_in = new_r_hand + self.r_hand_embedding
+        body_in = new_body + self.body_embedding
+
+        # (L, B, D) -> (B, L, D)
+        l_hand_in = l_hand_in.permute(1, 0, 2)
+        r_hand_in = r_hand_in.permute(1, 0, 2)
+        body_in = body_in.permute(1, 0, 2)
+
+        # encoder: medvitv2 (B, L, D)
+        l_hand_out, r_hand_out, body_out = self.encoder(l_hand_in, r_hand_in, body_in)
+
+        # full memory
+        full_memory = torch.cat((l_hand_out, r_hand_out, body_out), dim = -1) # [B, L, D_sum]
+        full_memory = full_memory.permute(1, 0, 2) # [L, B, D_sum]
+
+        # decoder
+        decoder_out = self.decoder(self.class_query.repeat(1, batch_size, 1), full_memory, training=training)
+
+        # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
+        out = self.projection(decoder_out).squeeze(0)
+        return out
 
     def get_custom_decoder(self, nhead):
         decoder_layer = DecoderLayer(self.d_model, nhead, self.d_ff)
         decoder_norm = LayerNorm(self.d_model)
         self.inner_classifiers_config[0] = self.d_model
         return PBEEDecoder(decoder_layer, self.num_decoder_layers, norm = decoder_norm,
-                           inner_classifiers_config = self.inner_classifiers_config, patient = self.patience)
-
-    def forward(self, src: list, tgt: Tensor, 
-                src_mask: Optional[Tensor] = None, tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
-                src_key_padding_mask: Optional[Tensor] = None, tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None,                
-                src_is_causal: Optional[bool] = None, tgt_is_causal: Optional[bool] = None, memory_is_causal: bool = False,
-                training:bool = True, ) -> Tensor:
-        
-        lh, rh, body = self.encoder(src)
-
-        # Nối lại để tạo bộ nhớ hoàn chỉnh cho decoder
-        full_memory = torch.cat((lh, rh, body), dim = -1) # [L, B, D_sum]
-
-        # Gọi Decoder
-        output = self.decoder(tgt, full_memory, tgt_mask = tgt_mask,
-                              memory_mask = memory_mask,
-                              tgt_key_padding_mask = tgt_key_padding_mask,
-                              memory_key_padding_mask = memory_key_padding_mask,
-                              training=training)
-
-        return output
-
-
-class SiFormer(nn.Module):
-    def __init__(self, num_classes, num_hid = 108, attn_type = 'prob',
-                  num_comm_layers = 1, num_enc_layers = 3, num_dec_layers = 2, patience = 1,
-                 seq_len = 204, device = None, IA_encoder = True, IA_decoder = False):
-        super(SiFormer, self).__init__()
-        print("Feature isolated transformer")
-
-        # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
-        self.l_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42, seq_len = seq_len))
-        self.r_hand_embedding = nn.Parameter(self.get_encoding_table(d_model = 42, seq_len = seq_len))
-        self.body_embedding   = nn.Parameter(self.get_encoding_table(d_model = 24, seq_len = seq_len))
-
-        self.class_query = nn.Parameter(torch.rand(1, 1, num_hid))
-        self.transformer = FeatureIsolatedTransformer(
-            d_model_list = [42, 42, 24], nhead_list = [3, 3, 2, 9],
-            num_comm_layers=num_comm_layers,
-            num_encoder_layers = num_enc_layers, num_decoder_layers = num_dec_layers,
-            selected_attn = attn_type, 
-            IA_encoder = IA_encoder, IA_decoder = IA_decoder,
-            inner_classifiers_config = [num_hid, num_classes],
-            projections_config = [seq_len, 1],  device = device,
-            patience = patience, use_pyramid_encoder = False, distil = False
-        )
-
-        self.projection = nn.Linear(num_hid, num_classes)
-
-    def forward(self, l_hand, r_hand, body):
-        training = self.training
-        batch_size = l_hand.size(0)
-
-        # (batch_size, seq_len, respected_feature_size, coordinates): (24, 204, 54, 2)
-        # -> (batch_size, seq_len, feature_size):  (24, 204, 108)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1) # [B, L, 21, 2] -> [B, L, 42]
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1)
-        body = body.view(body.size(0), body.size(1), -1)
-
-        # (batch_size, seq_len, feature_size) : (24, 204, 108)
-        # -> (seq_len, batch_size, feature_size): (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype = torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype = torch.float32)
-        new_body = body.permute(1, 0, 2).type(dtype = torch.float32)
-
-        # feature_map = self.feature_extractor(new_inputs)
-        # transformer_in = feature_map + self.pos_embedding
-        l_hand_in = new_l_hand + self.l_hand_embedding  # Shape remains the same
-        r_hand_in = new_r_hand + self.r_hand_embedding
-        body_in = new_body + self.body_embedding
-
-        # (seq_len, batch_size, feature_size) -> (batch_size, 1, feature_size): (24, 1, 108)
-        transformer_output = self.transformer(
-            [l_hand_in, r_hand_in, body_in], self.class_query.repeat(1, batch_size, 1), training = training
-        ).transpose(0, 1)
-
-        # (batch_size, 1, feature_size) -> (batch_size, num_class): (24, 100)
-        out = self.projection(transformer_output).squeeze(1)
-        return out
+                           inner_classifiers_config = self.inner_classifiers_config, 
+                           patient = self.pat_dec)
 
     @staticmethod
     def get_encoding_table(d_model = 108, seq_len = 204):
@@ -338,63 +156,3 @@ class SiFormer(nn.Module):
                 frame_pos[i, j] = frame_pos[i, j - 1]
         frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
         return frame_pos
-
-
-class AbsolutePE(nn.Module):
-    def __init__(self, d_model, dropout = 0.1, max_len = 1024, scale_factor = 1.0):
-        super(AbsolutePE, self).__init__()
-        self.dropout = nn.Dropout(p = dropout)
-        pe = torch.zeros(max_len, d_model)  # positional encoding
-        position = torch.arange(0, max_len, dtype = torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        pe[:, 0::2] = torch.sin((position * div_term)*(d_model/max_len))
-        pe[:, 1::2] = torch.cos((position * div_term)*(d_model/max_len))
-        pe = scale_factor * pe.unsqueeze(0)
-        # reshape the matrix shape to met the input shape
-        # pe = pe.squeeze(0).unsqueeze(1)
-        self.register_buffer('pe', pe)  # this stores the variable in the state_dict (used for non-trainable variables)
-
-    def forward(self, x):
-        x = x + self.pe
-        return self.dropout(x)
-
-
-class SpoTer(nn.Module):
-    def __init__(self, num_classes, num_hid = 108, num_enc_layers = 3, num_dec_layers = 2, seq_len = 204):
-        super(SpoTer, self).__init__()
-        print("Normal transformer")
-        self.embedding = AbsolutePE(d_model = num_hid,max_len = seq_len)
-        self.class_query = nn.Parameter(torch.rand(1, num_hid))
-        self.transformer = nn.Transformer(num_hid, 9, num_enc_layers, num_dec_layers)
-        custom_decoder_layer = DecoderLayer(self.transformer.d_model, self.transformer.nhead, 2048, 0.1, "relu")
-        self.transformer.decoder.layers = _get_clones(custom_decoder_layer, self.transformer.decoder.num_layers)
-        self.projection = nn.Linear(num_hid, num_classes)
-        print(f"num_enc_layers {num_enc_layers}, num_dec_layers {num_dec_layers}")
-
-    def forward(self, l_hand, r_hand, body, training):
-        batch_size = l_hand.size(0)
-
-        inputs = torch.cat((l_hand, r_hand, body), -2)
-        inputs = inputs.view(inputs.size(0), inputs.size(1), inputs.size(2) * inputs.size(3))
-
-        new_inputs = self.embedding(inputs)
-        new_inputs = new_inputs.permute(1, 0, 2).type(dtype = torch.float32)
-
-        transformer_out = self.transformer(new_inputs, self.class_query.repeat(1, batch_size, 1)).transpose(0, 1)
-        out = self.projection(transformer_out).squeeze()
-        return out
-
-
-if __name__ == '__main__':
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    model = SiFormer(num_classes=100, 
-                     num_hid=108, 
-                     attn_type='prob',
-                    num_comm_layers=1,
-                    num_enc_layers=3, 
-                    num_dec_layers=4, device=device,
-                              IA_encoder=True, IA_decoder=True,
-                              patience=1)
-    
