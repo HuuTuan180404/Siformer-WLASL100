@@ -23,39 +23,34 @@ class LGBlock(nn.Module):
         assert num_layers > 0, "num_layers must be greater than 0"
         assert global_attn_type in ['self', 'shared'], "global_attn_type must be 'self' or 'shared'"
 
-        local_attn = None
+        global_attn = None
         if local_attn_type == 'shared':
-            lh_local_attn = prob_attention_factory(d_model_list[0], n_heads_list[0], dropout)
-            rh_local_attn = prob_attention_factory(d_model_list[1], n_heads_list[1], dropout)
-            body_local_attn = prob_attention_factory(d_model_list[2], n_heads_list[2], dropout)
-            local_attn = [lh_local_attn, rh_local_attn, body_local_attn]
+            lh_local_attn = prob_attention_factory(d_model_list[0], n_heads_list[0])
+            rh_local_attn = prob_attention_factory(d_model_list[1], n_heads_list[1])
+            body_local_attn = prob_attention_factory(d_model_list[2], n_heads_list[2])
+            global_attn = [lh_local_attn, rh_local_attn, body_local_attn]
 
         # global_attn = None
         # if global_attn_type == 'shared':
         #     global_attn = prob_attention_factory(sum(d_model_list), n_heads_list[-1], dropout)
-        
-        layers = []
-        print(f'{num_layers} local layers')
-        for i in range(num_layers):
-            layers.append(
-                LocalLayer(
-                    d_model_list=d_model_list,
-                    n_heads_list=n_heads_list,
-                    d_ff=d_ff,
-                    attn_list=local_attn,
-                    act=act,
-                    dropout=dropout
-                )
-            )
-
-        layers.append(
-            GlobalLayer(
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
+            self.layers.append(LocalLayer(
                 d_model_list=d_model_list,
-                hidden_dim=512,
-            )
-        )
-        
-        self.layers = nn.ModuleList(layers)
+                nhead_list=n_heads_list,
+                d_ff=d_ff,
+                dropout=dropout,
+                act=act
+            ))
+            self.layers.append(GlobalLayer(
+                d_model_list=d_model_list,
+                nhead_list=n_heads_list,
+                d_ff=d_ff,
+                dropout=dropout,
+                act=act,
+                self_attn_list=global_attn
+            ))
+        logger(f'[Local -> Gllobal] = {num_layers}')
 
     def forward(self, lh, rh, body):
         # lh, rh, body: (B, L, D)
@@ -90,7 +85,7 @@ class MyModel(nn.Module):
             dropout=0.1,
             act='gelu',
             local_attn_type = 'shared',
-            global_attn_type='self',
+            global_attn_type='shared',
             num_layers=num_enc_layers,
         )
 

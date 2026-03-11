@@ -4,79 +4,121 @@ import torch.nn.functional as F
 from siformer.utils_module import *
 
 
-class Stream1(nn.Module):
-    def __init__(self, d_model, n_heads, d_ff, attn=None, act=None, dropout=0.):
+class LocalSelfAttention(nn.Module):
+    def __init__(self, d_model, nhead, window_size=12, dropout=0.1):
         super().__init__()
-
-        self.attn = prob_attention_factory(d_model, n_heads, dropout) if attn is None else attn
-
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.ReLU() if act == 'relu' else nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_ff, d_model),
+        self.window_size = window_size
+        self.attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
         )
 
     def forward(self, x):
         # x: [B, L, D]
+        B, L, D = x.shape
+        w = self.window_size
 
-        attn_out, _ = self.attn(x, x, x)
-        x = self.norm1(x + self.dropout(attn_out))
+        x = x.view(B, -1, w, D)          # [B, num_win, w, D]
+        x = x.reshape(-1, w, D)          # [B*num_win, w, D]
 
-        ffn_out = self.ffn(x)
-        x = x + self.dropout(ffn_out)
+        out, _ = self.attn(x, x, x)
 
-        return self.norm2(x)
+        out = out.reshape(B, -1, w, D).reshape(B, -1, D)
+        return out[:, :L]
 
-class Stream(nn.Module):
-    def __init__(self, d_model, n_heads, d_ff, attn=None, act=None, dropout=0.):
+
+class LocalityFeedForward(nn.Module):
+    def __init__(self, in_dim=64, expand_ratio=4., d_ff=None, act='relu', dropout=0.1):
         super().__init__()
+        hidden_dim = int(in_dim * expand_ratio) if d_ff is None else d_ff
 
-        self.attn = prob_attention_factory(d_model, n_heads, dropout) if attn is None else attn
+        # Pointwise conv (expand)
+        self.pw1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=1)
+        self.norm1 = nn.LayerNorm(hidden_dim)
 
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        # Depthwise conv (locality)
+        self.dw = nn.Conv1d(hidden_dim, hidden_dim,
+            kernel_size=3, padding=1, groups=hidden_dim
+        )
+        self.norm2 = nn.LayerNorm(hidden_dim)
+
+        # Activation (ONLY here, MedViTV2-style)
+        self.act = nn.ReLU() if act == 'relu' else nn.GELU()
+
+        # Pointwise conv (project back)
+        self.pw2 = nn.Conv1d(hidden_dim, in_dim, kernel_size=1)
+        self.norm3 = nn.LayerNorm(in_dim)
+
         self.dropout = nn.Dropout(dropout)
-        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
-        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
-        self.activation = F.relu if act == "relu" else F.gelu
 
     def forward(self, x):
         # x: [B, L, D]
+        residual = x
+        x = x.transpose(1, 2)          # [B, D, L]
 
-        attn_out, _ = self.attn(x, x, x) # (B, L, D)
-        y = x = self.norm1(x + self.dropout(attn_out))
+        # pw1
+        x = self.pw1(x)
+        x = x.transpose(1, 2)          # [B, L, hidden_dim]
+        x = self.norm1(x)
 
-        y = self.dropout(self.activation(self.conv1(y.transpose(1, 2))))
-        y = self.dropout(self.conv2(y).transpose(1, 2))
+        # dw
+        x = x.transpose(1, 2)          # [B, hidden_dim, L]
+        x = self.dw(x)
+        x = x.transpose(1, 2)
+        x = self.norm2(x)
 
-        return self.norm2(x+y)
+        # activation AFTER locality
+        x = self.act(x)
+
+        # project back
+        x = x.transpose(1, 2)          # [B, hidden_dim, L]
+        x = self.pw2(x)
+        x = x.transpose(1, 2)          # [B, L, in_dim]
+        x = self.norm3(x)
+
+        x = self.dropout(x)
+
+        return x + residual
+
 
 class LocalLayer(nn.Module):
-    def __init__(self, d_model_list, n_heads_list, d_ff, attn_list=None, act=None, dropout=0.):
+    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act):
         super().__init__()
 
-        if attn_list is None: # self-attention
-            self.lh = Stream(d_model_list[0], n_heads_list[0], d_ff, None, act, dropout)
-            self.rh = Stream(d_model_list[1], n_heads_list[1], d_ff, None, act, dropout)
-            self.body = Stream(d_model_list[2], n_heads_list[2], d_ff, None, act, dropout)
-        else: # shared attention
-            self.lh = Stream(d_model_list[0], n_heads_list[0], d_ff, attn_list[0], act, dropout)
-            self.rh = Stream(d_model_list[1], n_heads_list[1], d_ff, attn_list[1], act, dropout)
-            self.body = Stream(d_model_list[2], n_heads_list[2], d_ff, attn_list[2], act, dropout)
+        self.lh_norm1 = nn.LayerNorm(d_model_list[0])
+        self.rh_norm1 = nn.LayerNorm(d_model_list[1])
+        self.body_norm1 = nn.LayerNorm(d_model_list[2])
 
-    def forward(self, lh, rh, body):
+        self.lh_attn = LocalSelfAttention(d_model_list[0], nhead_list[0],
+                                          window_size=12, dropout=dropout)
+        self.rh_attn = LocalSelfAttention(d_model_list[1], nhead_list[1],
+                                          window_size=12, dropout=dropout)
+        self.body_attn = LocalSelfAttention(d_model_list[2], nhead_list[2],
+                                            window_size=12, dropout=dropout)
+
+        self.lh_norm2 = nn.LayerNorm(d_model_list[0])
+        self.rh_norm2 = nn.LayerNorm(d_model_list[1])
+        self.body_norm2 = nn.LayerNorm(d_model_list[2])
+
+        self.lh_lffn = LocalityFeedForward(in_dim=d_model_list[0], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
+        self.rh_lffn = LocalityFeedForward(in_dim=d_model_list[1], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
+        self.body_lffn = LocalityFeedForward(in_dim=d_model_list[2], expand_ratio=4., d_ff=d_ff, act=act, dropout=dropout)
+
+    def forward(self, l_hand, r_hand, body): # post-norm
         # src: [B, L, D]
 
-        lh = self.lh(lh)
-        rh = self.rh(rh)
-        body = self.body(body)
+        # Left hand
+        l_hand_out = self.lh_norm1(l_hand + self.lh_attn(l_hand))
+        l_hand_out = self.lh_norm2(l_hand_out + self.lh_lffn(l_hand_out))
 
-        return lh, rh, body
+        # Right hand
+        r_hand_out = self.rh_norm1(r_hand + self.rh_attn(r_hand))
+        r_hand_out = self.rh_norm2(r_hand_out + self.rh_lffn(r_hand_out))
+
+        # Body
+        body_out = self.body_norm1(body + self.body_attn(body))
+        body_out = self.body_norm2(body_out + self.body_lffn(body_out))
+
+        return l_hand_out, r_hand_out, body_out
 
 
 if __name__ == '__main__':
