@@ -6,14 +6,7 @@ from siformer.global_module import GlobalLayer
 from torch.nn.modules.normalization import LayerNorm
 from siformer.decoder import DecoderLayer, PBEEDecoder
 from siformer.attention import AttentionLayer, ProbAttention
-
-
-def prob_attention_factory(d_model, n_heads, dropout=0.):
-    return AttentionLayer(ProbAttention(attention_dropout=dropout , output_attention = True), d_model, n_heads, mix = False)
-
-
-def multi_head_attention_factory(d_model, n_heads, dropout=0.):
-    return nn.MultiheadAttention(d_model, n_heads, dropout=dropout)
+from siformer.utils_module import prob_attention_factory, multi_head_attention_factory, window_attention_factory
 
 
 class LGBlock(nn.Module):
@@ -23,16 +16,21 @@ class LGBlock(nn.Module):
         assert num_layers > 0, "num_layers must be greater than 0"
         assert global_attn_type in ['self', 'shared'], "global_attn_type must be 'self' or 'shared'"
 
-        global_attn = None
+        # window attention
+        local_window_attns = window_attention_factory
         if local_attn_type == 'shared':
-            lh_local_attn = prob_attention_factory(d_model_list[0], n_heads_list[0])
-            rh_local_attn = prob_attention_factory(d_model_list[1], n_heads_list[1])
-            body_local_attn = prob_attention_factory(d_model_list[2], n_heads_list[2])
-            global_attn = [lh_local_attn, rh_local_attn, body_local_attn]
+            lh_local_attn = window_attention_factory(d_model_list[0], n_heads_list[-1], window_size=12)
+            rh_local_attn = window_attention_factory(d_model_list[1], n_heads_list[-1], window_size=12)
+            bd_local_attn = window_attention_factory(d_model_list[2], n_heads_list[-1], window_size=12)
+            local_window_attns = [lh_local_attn, rh_local_attn, bd_local_attn]
+        
+        global_attns = prob_attention_factory
+        if global_attn_type == 'shared':
+            lh_glocal_attn = prob_attention_factory(d_model_list[0], n_heads_list[0])
+            rh_glocal_attn = prob_attention_factory(d_model_list[1], n_heads_list[1])
+            bd_glocal_attn = prob_attention_factory(d_model_list[2], n_heads_list[2])
+            global_attns = [lh_glocal_attn, rh_glocal_attn, bd_glocal_attn]
 
-        # global_attn = None
-        # if global_attn_type == 'shared':
-        #     global_attn = prob_attention_factory(sum(d_model_list), n_heads_list[-1], dropout)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
             self.layers.append(LocalLayer(
@@ -40,7 +38,8 @@ class LGBlock(nn.Module):
                 nhead_list=n_heads_list,
                 d_ff=d_ff,
                 dropout=dropout,
-                act=act
+                act=act,
+                local_attn_factory=local_window_attns
             ))
             self.layers.append(GlobalLayer(
                 d_model_list=d_model_list,
@@ -48,7 +47,7 @@ class LGBlock(nn.Module):
                 d_ff=d_ff,
                 dropout=dropout,
                 act=act,
-                self_attn_list=global_attn
+                global_attn_factory=global_attns
             ))
         logger(f'[Local -> Gllobal] = {num_layers}')
 
@@ -84,7 +83,7 @@ class MyModel(nn.Module):
             d_ff=2048,
             dropout=0.1,
             act='gelu',
-            local_attn_type = 'shared',
+            local_attn_type = 'self',
             global_attn_type='shared',
             num_layers=num_enc_layers,
         )
