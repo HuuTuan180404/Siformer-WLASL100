@@ -145,9 +145,9 @@ class MyModel(nn.Module):
         training = self.training
 
         # (B, L, J, C)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1)
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1)
-        new_body = body.view(body.size(0), body.size(1), -1)
+        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1).type(dtype=torch.float32)
+        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1).type(dtype=torch.float32)
+        new_body = body.view(body.size(0), body.size(1), -1).type(dtype=torch.float32)
         # -> (B, L, J*C)
 
         new_l_hand = self.lh_embedding(new_l_hand)  # (B, L, D)
@@ -155,9 +155,9 @@ class MyModel(nn.Module):
         new_body = self.bd_embedding(new_body)
 
         # (B, L, D) -> (L, B, D): (24, 204, 108) -> (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_r_hand = new_r_hand.permute(1, 0, 2).type(dtype=torch.float32)
-        new_body = new_body.permute(1, 0, 2).type(dtype=torch.float32)
+        new_l_hand = new_l_hand.permute(1, 0, 2)
+        new_r_hand = new_r_hand.permute(1, 0, 2)
+        new_body = new_body.permute(1, 0, 2)
 
         l_hand_in = new_l_hand + self.lh_PE  # Shape remains the same
         r_hand_in = new_r_hand + self.rh_PE
