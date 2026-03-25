@@ -76,7 +76,6 @@ class LGBlock(nn.Module):
                     global_attn_factory=global_attns,
                 )
             )
-        logger(f"[Local -> Gllobal] = {num_layers}")
 
     def forward(self, lh, rh, body):
         # lh, rh, body: (B, L, D)
@@ -99,6 +98,7 @@ class MyModel(nn.Module):
         device=None,
     ):
         super(MyModel, self).__init__()
+        logger(f"[Model]: Enc={num_enc_layers}, Dec={num_dec_layers}, Pat={pat_dec}")
         self.embed_dim_list = [128, 128, 64]
         self.embed_n_heads_list = [8, 8, 4]
         self.d_model = sum(self.embed_dim_list)
@@ -140,41 +140,39 @@ class MyModel(nn.Module):
 
         self.projection = nn.Linear(self.d_model, num_classes)
 
-    def forward(self, l_hand, r_hand, body):
-        batch_size = l_hand.size(0)
+    def forward(self, lh, rh, bd):
+        batch_size = lh.size(0)
         training = self.training
 
         # (B, L, J, C)
-        new_l_hand = l_hand.view(l_hand.size(0), l_hand.size(1), -1).type(dtype=torch.float32)
-        new_r_hand = r_hand.view(r_hand.size(0), r_hand.size(1), -1).type(dtype=torch.float32)
-        new_body = body.view(body.size(0), body.size(1), -1).type(dtype=torch.float32)
+        new_lh = lh.view(lh.size(0), lh.size(1), -1).type(dtype=torch.float32)
+        new_rh = rh.view(rh.size(0), rh.size(1), -1).type(dtype=torch.float32)
+        new_bd = bd.view(bd.size(0), bd.size(1), -1).type(dtype=torch.float32)
         # -> (B, L, J*C)
 
-        new_l_hand = self.lh_embedding(new_l_hand)  # (B, L, D)
-        new_r_hand = self.rh_embedding(new_r_hand)
-        new_body = self.bd_embedding(new_body)
+        new_lh = self.lh_embedding(new_lh)  # (B, L, D)
+        new_rh = self.rh_embedding(new_rh)
+        new_bd = self.bd_embedding(new_bd)
 
         # (B, L, D) -> (L, B, D): (24, 204, 108) -> (204, 24, 108)
-        new_l_hand = new_l_hand.permute(1, 0, 2)
-        new_r_hand = new_r_hand.permute(1, 0, 2)
-        new_body = new_body.permute(1, 0, 2)
+        new_lh = new_lh.permute(1, 0, 2)
+        new_rh = new_rh.permute(1, 0, 2)
+        new_bd = new_bd.permute(1, 0, 2)
 
-        l_hand_in = new_l_hand + self.lh_PE  # Shape remains the same
-        r_hand_in = new_r_hand + self.rh_PE
-        body_in = new_body + self.bd_PE
+        lh_in = new_lh + self.lh_PE  # Shape remains the same
+        rh_in = new_rh + self.rh_PE
+        bd_in = new_bd + self.bd_PE
 
         # (L, B, D) -> (B, L, D)
-        l_hand_in = l_hand_in.permute(1, 0, 2)
-        r_hand_in = r_hand_in.permute(1, 0, 2)
-        body_in = body_in.permute(1, 0, 2)
+        lh_in = lh_in.permute(1, 0, 2)
+        rh_in = rh_in.permute(1, 0, 2)
+        bd_in = bd_in.permute(1, 0, 2)
 
         # encoder: medvitv2 (B, L, D)
-        l_hand_out, r_hand_out, body_out = self.encoder(l_hand_in, r_hand_in, body_in)
+        lh_out, rh_out, bd_out = self.encoder(lh_in, rh_in, bd_in)
 
         # full memory
-        full_memory = torch.cat(
-            (l_hand_out, r_hand_out, body_out), dim=-1
-        )  # [B, L, D_sum]
+        full_memory = torch.cat((lh_out, rh_out, bd_out), dim=-1)  # [B, L, D_sum]
         full_memory = full_memory.permute(1, 0, 2)  # [L, B, D_sum]
 
         # decoder
@@ -187,7 +185,6 @@ class MyModel(nn.Module):
         return out
 
     def get_custom_decoder(self, n_heads):
-        print(f'self.d_model = {self.d_model} | n_heads = {n_heads}')
         decoder_layer = DecoderLayer(self.d_model, n_heads, self.d_ff)
         decoder_norm = nn.LayerNorm(self.d_model)
         self.inner_classifiers_config[0] = self.d_model

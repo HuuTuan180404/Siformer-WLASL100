@@ -550,20 +550,20 @@ if __name__ == "__main__":
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_enc_layers=2,
+        num_enc_layers=1,
         num_dec_layers=3,
         patience=1,
     )
 
     args = parser.parse_args()
-    # acc = train(args)
+    acc = train(args)
 
-    for enc in [1, 3, 4, 5, 6]:
-        args.num_enc_layers=enc
-        acc = train(args)
+    # for enc in [2, 3, 4, 5, 6]:
+    #     args.num_enc_layers=enc
+    #     acc = train(args)
 
     # for dec in [1, 2, 4, 5, 6]:
-    #     args.num_dec_layers=dec
+    #     args.num_dec_layers = dec
     #     acc = train(args)
 
     # lh = torch.rand(24, 204, 21, 2)

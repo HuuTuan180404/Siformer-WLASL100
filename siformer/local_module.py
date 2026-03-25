@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from siformer.attention import WindowAttention
 
 
-
 class LocalityFeedForward(nn.Module):
     def __init__(self, in_dim=64, expand_ratio=4.0, d_ff=None, act="relu", dropout=0.1):
         super().__init__()
@@ -76,14 +75,11 @@ class LocalLayer(nn.Module):
         #         d_model_list[2], nhead_list[2], window_size=12, dropout=dropout
         #     )
 
-
         # self.lh_attn, self.rh_attn, self.bd_attn = local_attn_factory
 
         self.lh_attn = WindowAttention(d_model_list[0], nhead_list[0], window_size=12)
         self.rh_attn = WindowAttention(d_model_list[1], nhead_list[1], window_size=12)
         self.bd_attn = WindowAttention(d_model_list[2], nhead_list[2], window_size=12)
-
-        # self.lh_attn = F.scaled_dot_product_attention()
 
         self.lh_norm1 = nn.LayerNorm(d_model_list[0])
         self.rh_norm1 = nn.LayerNorm(d_model_list[1])

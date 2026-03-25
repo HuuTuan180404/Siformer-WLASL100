@@ -17,7 +17,6 @@ class GlobalLayer(nn.Module):
         self.norm1_rh = nn.LayerNorm(d_model_list[1])
         self.norm1_bd = nn.LayerNorm(d_model_list[2])
 
-        # rh truyền cho lh
         self.lh_from_rh_attn = nn.MultiheadAttention(
             d_model_list[0],
             nhead_list[0],
@@ -26,15 +25,6 @@ class GlobalLayer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.lh_from_bd_attn = nn.MultiheadAttention(
-            d_model_list[0],
-            nhead_list[0],
-            kdim=d_model_list[2],
-            vdim=d_model_list[2],
-            dropout=dropout,
-            batch_first=True,
-        )
-
         self.rh_from_lh_attn = nn.MultiheadAttention(
             d_model_list[1],
             nhead_list[1],
@@ -43,43 +33,9 @@ class GlobalLayer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.rh_from_bd_attn = nn.MultiheadAttention(
-            d_model_list[1],
-            nhead_list[1],
-            kdim=d_model_list[2],
-            vdim=d_model_list[2],
-            dropout=dropout,
-            batch_first=True,
-        )
-
-        self.bd_from_lh_attn = nn.MultiheadAttention(
-            d_model_list[2],
-            nhead_list[2],
-            kdim=d_model_list[0],
-            vdim=d_model_list[0],
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.bd_from_rh_attn = nn.MultiheadAttention(
-            d_model_list[2],
-            nhead_list[2],
-            kdim=d_model_list[1],
-            vdim=d_model_list[1],
-            dropout=dropout,
-            batch_first=True,
-        )
-
-        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
-        self.lh_fusion_from_rh = nn.Linear(d_model_list[0], d_model_list[0])
-        self.lh_fusion_from_bd = nn.Linear(d_model_list[0], d_model_list[0])
-        self.rh_fusion_from_lh = nn.Linear(d_model_list[1], d_model_list[1])
-        self.rh_fusion_from_bd = nn.Linear(d_model_list[1], d_model_list[1])
-        self.bd_fusion_from_lh = nn.Linear(d_model_list[2], d_model_list[2])
-        self.bd_fusion_from_rh = nn.Linear(d_model_list[2], d_model_list[2])
 
         self.norm2_lh = nn.LayerNorm(d_model_list[0])
         self.norm2_rh = nn.LayerNorm(d_model_list[1])
-        self.norm2_bd = nn.LayerNorm(d_model_list[2])
 
         # Giai đoạn 3: Feed-Forward Networks
         self.ffn_lh = nn.Sequential(
@@ -110,28 +66,21 @@ class GlobalLayer(nn.Module):
         # l_hand_x, r_hand_x, bd_x: [B, L, D]
 
         # --- 1. Self-Attention ---
-        lh_self = self.self_attn_lh(lh_x)
+        lh_self = self.self_attn_lh(lh_x, lh_x, lh_x)
         lh_x = self.norm1_lh(lh_x + self.dropout(lh_self))
 
-        rh_self = self.self_attn_rh(rh_x)
+        rh_self = self.self_attn_rh(rh_x, rh_x, rh_x)
         rh_x = self.norm1_rh(rh_x + self.dropout(rh_self))
 
-        bd_self = self.self_attn_bd(bd_x)
+        bd_self = self.self_attn_bd(bd_x, bd_x, bd_x)
         bd_x = self.norm1_bd(bd_x + self.dropout(bd_self))
 
         # --- 2. Cross-Attention ---
         lh_from_rh, _ = self.lh_from_rh_attn(lh_x, rh_x, rh_x)
-        # lh_from_bd, _ = self.lh_from_bd_attn(lh_x, bd_x, bd_x)
-
         rh_from_lh, _ = self.rh_from_lh_attn(rh_x, lh_x, lh_x)
-        # rh_from_bd, _ = self.rh_from_bd_attn(rh_x, bd_x, bd_x)
-
-        # bd_from_lh, _ = self.bd_from_lh_attn(bd_x, lh_x, lh_x)
-        # bd_from_rh, _ = self.bd_from_rh_attn(bd_x, rh_x, rh_x)
 
         lh_x = self.norm2_lh(lh_x + lh_from_rh)
         rh_x = self.norm2_rh(rh_x + rh_from_lh)
-        # bd_x = self.norm2_bd(bd_x + bd_from_lh)
 
         # --- 3. Feed-Forward Network ---
         lh_x = self.norm3_lh(lh_x + self.dropout(self.ffn_lh(lh_x)))

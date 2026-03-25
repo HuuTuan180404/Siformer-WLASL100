@@ -15,15 +15,17 @@ class FlashAttention(nn.Module):
         self.embed_dim = embed_dim
         self.n_heads = n_heads
 
-    def forward(self, x):
+    def forward(self, q, k, v):
         # x: [B, L, D]
-        B, L, D = x.shape
+        B, L, D = q.shape
         head_dim = D // self.n_heads
 
-        x = x.view(B, L, self.n_heads, head_dim)
-        x = x.permute(0, 2, 1, 3)  # [B, n_heads, L, head_dim]
+        q = q.view(B, L, self.n_heads, head_dim).transpose(1, 2)
+        k = k.view(B, L, self.n_heads, head_dim).transpose(1, 2)
+        v = v.view(B, L, self.n_heads, head_dim).transpose(1, 2)
+        # [B, n_heads, L, head_dim]
 
-        out = F.scaled_dot_product_attention(x, x, x)  # [B, n_heads, L, head_dim]
+        out = F.scaled_dot_product_attention(q, k, v)  # [B, n_heads, L, head_dim]
 
         out = out.permute(0, 2, 1, 3)
 
@@ -51,7 +53,7 @@ class WindowAttention(nn.Module):
 
         x = x.reshape(B, num_win, w, D)  # [B, num_win, w, D]
         x = x.reshape(-1, w, D)  # [B*num_win, w, D]
-        out = self.attn(x)  # [B*num_win, w, D]
+        out = self.attn(x, x, x)  # [B*num_win, w, D]
         out = out.reshape(B, num_win * w, D)  # [B, num_win*w, D]
 
         return out
