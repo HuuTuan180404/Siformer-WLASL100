@@ -32,6 +32,18 @@ class FlashAttention(nn.Module):
         return out.reshape(B, L, -1)  # (B, L, D)
 
 
+def prob_attn_factory(embed_dim, n_heads, dropout=0.0):
+
+    attention = ProbAttention(
+        mask_flag=False,
+        factor=5,
+        attention_dropout=dropout,
+        output_attention=True,
+    )
+
+    return AttentionLayer(attention=attention, d_model=embed_dim, n_heads=n_heads)
+
+
 class WindowAttention(nn.Module):
     def __init__(self, embed_dim, n_heads, window_size=12, dropout=0.0):
         super().__init__()
@@ -43,7 +55,8 @@ class WindowAttention(nn.Module):
             embed_dim % n_heads == 0
         ), f"d_model {embed_dim} should be divisible by n_heads {n_heads}."
 
-        self.attn = FlashAttention(embed_dim, n_heads)
+        # self.attn = FlashAttention(embed_dim, n_heads)
+        self.attn = prob_attn_factory(embed_dim, n_heads)
 
     def forward(self, x):
         # x: [B, L, D]
@@ -53,7 +66,7 @@ class WindowAttention(nn.Module):
 
         x = x.reshape(B, num_win, w, D)  # [B, num_win, w, D]
         x = x.reshape(-1, w, D)  # [B*num_win, w, D]
-        out = self.attn(x, x, x)  # [B*num_win, w, D]
+        out, _ = self.attn(x, x, x)  # [B*num_win, w, D]
         out = out.reshape(B, num_win * w, D)  # [B, num_win*w, D]
 
         return out

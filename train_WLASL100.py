@@ -466,6 +466,7 @@ def train(
 
     if eval_loader:
         logger("\nTesting checkpointed models starting...\n")
+        # for i in [11, 10, 9, 8, 7, 6, 5, 4,3, 2, 1]:
         for i in [11, 10, 9, 8, 7, 6]:
             # for i in [5, 4, 3]:
             for checkpoint_id in ["t", "v"]:
@@ -551,7 +552,7 @@ if __name__ == "__main__":
         IA_decoder=True,
         num_worker=2,
         num_enc_layers=1,
-        num_dec_layers=3,
+        num_dec_layers=2,
         patience=1,
     )
 

@@ -1,13 +1,35 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from siformer.attention import WindowAttention
+from siformer.utils_module import *
+
+
+class LocalSelfAttention(nn.Module):
+    def __init__(self, d_model, nhead, window_size=12, dropout=0.1):
+        super().__init__()
+        self.window_size = window_size
+        self.attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
+        )
+
+    def forward(self, x):
+        # x: [B, L, D]
+        B, L, D = x.shape
+        w = self.window_size
+
+        x = x.view(B, -1, w, D)  # [B, num_win, w, D]
+        x = x.reshape(-1, w, D)  # [B*num_win, w, D]
+
+        out, _ = self.attn(x, x, x)
+
+        out = out.reshape(B, -1, w, D).reshape(B, -1, D)
+        return out
 
 
 class LocalityFeedForward(nn.Module):
     def __init__(self, in_dim=64, expand_ratio=4.0, d_ff=None, act="relu", dropout=0.1):
         super().__init__()
-        hidden_dim = d_ff
+        hidden_dim = int(in_dim * expand_ratio) if d_ff is None else d_ff
 
         # Pointwise conv (expand)
         self.pw1 = nn.Conv1d(in_dim, hidden_dim, kernel_size=1)
@@ -59,35 +81,26 @@ class LocalityFeedForward(nn.Module):
 
 
 class LocalLayer(nn.Module):
-    def __init__(
-        self, d_model_list, nhead_list, d_ff, dropout, act, local_attn_factory=None
-    ):
+    def __init__(self, d_model_list, nhead_list, d_ff, dropout, act):
         super().__init__()
-
-        # if callable(local_attn_factory):
-        #     self.lh_attn = local_attn_factory(
-        #         d_model_list[0], nhead_list[0], window_size=12, dropout=dropout
-        #     )
-        #     self.rh_attn = local_attn_factory(
-        #         d_model_list[1], nhead_list[1], window_size=12, dropout=dropout
-        #     )
-        #     self.bd_attn = local_attn_factory(
-        #         d_model_list[2], nhead_list[2], window_size=12, dropout=dropout
-        #     )
-
-        # self.lh_attn, self.rh_attn, self.bd_attn = local_attn_factory
-
-        self.lh_attn = WindowAttention(d_model_list[0], nhead_list[0], window_size=12)
-        self.rh_attn = WindowAttention(d_model_list[1], nhead_list[1], window_size=12)
-        self.bd_attn = WindowAttention(d_model_list[2], nhead_list[2], window_size=12)
 
         self.lh_norm1 = nn.LayerNorm(d_model_list[0])
         self.rh_norm1 = nn.LayerNorm(d_model_list[1])
-        self.bd_norm1 = nn.LayerNorm(d_model_list[2])
+        self.body_norm1 = nn.LayerNorm(d_model_list[2])
+
+        self.lh_attn = LocalSelfAttention(
+            d_model_list[0], nhead_list[0], window_size=12, dropout=dropout
+        )
+        self.rh_attn = LocalSelfAttention(
+            d_model_list[1], nhead_list[1], window_size=12, dropout=dropout
+        )
+        self.body_attn = LocalSelfAttention(
+            d_model_list[2], nhead_list[2], window_size=12, dropout=dropout
+        )
 
         self.lh_norm2 = nn.LayerNorm(d_model_list[0])
         self.rh_norm2 = nn.LayerNorm(d_model_list[1])
-        self.bd_norm2 = nn.LayerNorm(d_model_list[2])
+        self.body_norm2 = nn.LayerNorm(d_model_list[2])
 
         self.lh_lffn = LocalityFeedForward(
             in_dim=d_model_list[0],
@@ -103,7 +116,7 @@ class LocalLayer(nn.Module):
             act=act,
             dropout=dropout,
         )
-        self.bd_lffn = LocalityFeedForward(
+        self.body_lffn = LocalityFeedForward(
             in_dim=d_model_list[2],
             expand_ratio=4.0,
             d_ff=d_ff,
@@ -111,7 +124,7 @@ class LocalLayer(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, l_hand, r_hand, bd):  # post-norm
+    def forward(self, l_hand, r_hand, body):  # post-norm
         # src: [B, L, D]
 
         # Left hand
@@ -122,11 +135,11 @@ class LocalLayer(nn.Module):
         r_hand_out = self.rh_norm1(r_hand + self.rh_attn(r_hand))
         r_hand_out = self.rh_norm2(r_hand_out + self.rh_lffn(r_hand_out))
 
-        # bd
-        bd_out = self.bd_norm1(bd + self.bd_attn(bd))
-        bd_out = self.bd_norm2(bd_out + self.bd_lffn(bd_out))
+        # Body
+        body_out = self.body_norm1(body + self.body_attn(body))
+        body_out = self.body_norm2(body_out + self.body_lffn(body_out))
 
-        return l_hand_out, r_hand_out, bd_out
+        return l_hand_out, r_hand_out, body_out
 
 
 if __name__ == "__main__":
