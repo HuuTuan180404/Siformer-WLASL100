@@ -453,7 +453,8 @@ def train(args):
     if eval_loader:
         logger("\nTesting checkpointed models starting...\n")
         # for i in [5, 4,3, 2, 1]:
-        for i in [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]:
+        # for i in [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]:
+        for i in range(checkpoint_index):
             for checkpoint_id in ["t", "v"]:
                 path_to_load = (
                     "out-checkpoints/"
