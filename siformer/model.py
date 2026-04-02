@@ -96,7 +96,7 @@ class MyModel(nn.Module):
     ):
         super(MyModel, self).__init__()
 
-        self.embed_dim_list = [128, 128, 64]
+        self.embed_dim_list = [64, 64, 32]
         self.embed_n_heads_list = [8, 8, 4, 10]
         self.sum_embed_dim = sum(self.embed_dim_list)
 
