@@ -553,7 +553,7 @@ if __name__ == "__main__":
         num_worker=2,
         num_enc_layers=1,
         num_dec_layers=2,
-        patience=1,
+        patience=0,
     )
 
     args = parser.parse_args()

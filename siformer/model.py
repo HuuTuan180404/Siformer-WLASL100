@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn as nn
 from utils import logger
 from siformer.local_module import LocalLayer
@@ -110,15 +111,9 @@ class MyModel(nn.Module):
         self.bd_embedding = nn.Linear(d_model_list[2], self.embed_dim_list[2])
 
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
-        self.lh_PE = nn.Parameter(
-            self.get_encoding_table(d_model=self.embed_dim_list[0])
-        )
-        self.rh_PE = nn.Parameter(
-            self.get_encoding_table(d_model=self.embed_dim_list[1])
-        )
-        self.bd_PE = nn.Parameter(
-            self.get_encoding_table(d_model=self.embed_dim_list[2])
-        )
+        self.lh_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[0]))
+        self.rh_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[1]))
+        self.bd_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[2]))
 
         # self.encoder
         self.encoder = LGBlock(
@@ -196,7 +191,7 @@ class MyModel(nn.Module):
         )
 
     @staticmethod
-    def get_encoding_table(d_model=108, seq_len=204):
+    def get_frame_PE(d_model=108, seq_len=204):
         torch.manual_seed(42)
         tensor_shape = (seq_len, d_model)
         frame_pos = torch.rand(tensor_shape)
@@ -205,3 +200,20 @@ class MyModel(nn.Module):
                 frame_pos[i, j] = frame_pos[i, j - 1]
         frame_pos = frame_pos.unsqueeze(1)  # (seq_len, 1, feature_size): (204, 1, 108)
         return frame_pos
+
+    @staticmethod
+    def get_sin_cos_PE(d_model=108, seq_len=204):
+        position = torch.arange(seq_len).unsqueeze(1)  # (seq_len, 1)
+
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )  # (d_model/2)
+
+        pe = torch.zeros(seq_len, d_model)
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(1)  # (seq_len, 1, d_model)
+
+        return pe
