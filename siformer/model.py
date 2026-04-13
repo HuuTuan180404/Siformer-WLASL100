@@ -49,9 +49,6 @@ class LGBlock(nn.Module):
             body_local_attn = prob_attention_factory(d_model_list[2], n_heads_list[2])
             global_attn = [lh_local_attn, rh_local_attn, body_local_attn]
 
-        # global_attn = None
-        # if global_attn_type == 'shared':
-        #     global_attn = prob_attention_factory(sum(d_model_list), n_heads_list[-1], dropout)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
             self.layers.append(
@@ -111,9 +108,9 @@ class MyModel(nn.Module):
         self.bd_embedding = nn.Linear(d_model_list[2], self.embed_dim_list[2])
 
         # self.feature_extractor = FeatureExtractor(num_hid = 108, kernel_size = 7)
-        self.lh_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[0]))
-        self.rh_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[1]))
-        self.bd_PE = nn.Parameter(self.get_sin_cos_PE(d_model=self.embed_dim_list[2]))
+        self.lh_PE = nn.Parameter(self.get_frame_PE(d_model=self.embed_dim_list[0]))
+        self.rh_PE = nn.Parameter(self.get_frame_PE(d_model=self.embed_dim_list[1]))
+        self.bd_PE = nn.Parameter(self.get_frame_PE(d_model=self.embed_dim_list[2]))
 
         # self.encoder
         self.encoder = LGBlock(
