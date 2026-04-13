@@ -373,7 +373,7 @@ def train(
             total_train_time += train_time
 
         if val_loader:
-            pred_correct, pred_correct_topK, pred_all = evaluate(
+            pred_correct, pred_correct_topK, pred_all, avg_time = evaluate(
                 slr_model, val_loader, device
             )
             val_acc = pred_correct / pred_all
@@ -485,7 +485,7 @@ def train(
 
                 tested_model = torch.load(path_to_load, weights_only=False).to(device)
 
-                pred_correct, pred_correct_topK, pred_all = evaluate(
+                pred_correct, pred_correct_topK, pred_all, avg_time = evaluate(
                     tested_model, eval_loader, device
                 )
 
@@ -523,7 +523,8 @@ def train(
                 logger(
                     f"checkpoint_{checkpoint_id}_{i:<4}  ->  "
                     f"Top 1: {eval_acc_top1:<10} | "
-                    f"Top 5: {eval_acc_topk:<10}"
+                    f"Top 5: {eval_acc_topk:<10} | "
+                    f"AVG time: {avg_time:<10}"
                 )
 
         path_to_load = "out-checkpoints/" + top_result_name_top1 + ".pth"
@@ -551,8 +552,8 @@ if __name__ == "__main__":
         num_classes=100,
         IA_decoder=True,
         num_worker=2,
-        num_enc_layers=3,
-        num_dec_layers=1,
+        num_enc_layers=2,
+        num_dec_layers=2,
         patience=0,
     )
 

@@ -12,7 +12,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
     train_time_sec_list = []
 
     model.train()
-    
+
     for i, data in enumerate(dataloader):
         l_hands, r_hands, bodies, labels = data
 
@@ -47,13 +47,20 @@ def train_epoch(model, dataloader, criterion, optimizer, device, scheduler=None)
 
     avg_train_time = mean(train_time_sec_list)
 
-    return running_loss, pred_correct, pred_all, (pred_correct / pred_all), avg_train_time
+    return (
+        running_loss,
+        pred_correct,
+        pred_all,
+        (pred_correct / pred_all),
+        avg_train_time,
+    )
 
 
 def evaluate(model, dataloader, device, k=5):
     pred_correct, pred_all = 0, 0
     pred_correct_topK = 0
     stats = {i: [0, 0] for i in range(300)}
+    test_time_sec_list = []
 
     model.eval()
 
@@ -72,22 +79,29 @@ def evaluate(model, dataloader, device, k=5):
                 body = bodies[j].unsqueeze(0)  # [1, 204, 12, 2]
                 label = labels[j]
 
+                start_time = time.time()
                 output = model(l_hand, r_hand, body)
+                end_time = time.time()
+                test_time_sec_list.append(end_time - start_time)
+
                 output = output.unsqueeze(0).expand(1, -1, -1)
                 pred_all += 1
 
                 # Top 1
-                if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(label):
+                if int(torch.argmax(torch.nn.functional.softmax(output, dim=2))) == int(
+                    label
+                ):
                     stats[int(label)][0] += 1
                     pred_correct += 1
                 stats[int(label)][1] += 1
 
                 # Top K
-                topK= torch.topk(output, k).indices.flatten().tolist()
+                topK = torch.topk(output, k).indices.flatten().tolist()
                 if int(label[0]) in topK:
                     pred_correct_topK += 1
+    avg_time = mean(test_time_sec_list)
 
-    return pred_correct, pred_correct_topK, pred_all
+    return pred_correct, pred_correct_topK, pred_all, avg_time
 
 
 def evaluate_top_k(model, dataloader, device, k=5):
