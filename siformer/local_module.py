@@ -89,13 +89,13 @@ class LocalLayer(nn.Module):
         self.body_norm1 = nn.LayerNorm(d_model_list[2])
 
         self.lh_attn = LocalSelfAttention(
-            d_model_list[0], nhead_list[0], window_size=12, dropout=dropout
+            d_model_list[0], nhead_list[0], dropout=dropout
         )
         self.rh_attn = LocalSelfAttention(
-            d_model_list[1], nhead_list[1], window_size=12, dropout=dropout
+            d_model_list[1], nhead_list[1], dropout=dropout
         )
         self.body_attn = LocalSelfAttention(
-            d_model_list[2], nhead_list[2], window_size=12, dropout=dropout
+            d_model_list[2], nhead_list[2], dropout=dropout
         )
 
         self.lh_norm2 = nn.LayerNorm(d_model_list[0])
