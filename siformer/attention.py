@@ -3,7 +3,7 @@ import numpy as np
 import torch.nn as nn
 from math import sqrt
 import torch.nn.functional as F
-
+import math
 
 class FlashAttention(nn.Module):
     def __init__(self, embed_dim, n_heads):
@@ -302,8 +302,8 @@ class ProbAttention(nn.Module):
         keys = keys.transpose(2, 1)
         values = values.transpose(2, 1)
 
-        U_part = self.factor * np.ceil(np.log(L_K)).astype("int").item()  # c*ln(L_k)
-        u = self.factor * np.ceil(np.log(L_Q)).astype("int").item()  # c*ln(L_q)
+        U_part = int(self.factor * math.ceil(math.log(L_K)))
+        u = int(self.factor * math.ceil(math.log(L_Q)))
 
         U_part = U_part if U_part < L_K else L_K
         u = u if u < L_Q else L_Q
