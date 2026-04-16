@@ -23,6 +23,15 @@ class GlobalLayer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
+        self.lh_from_bd_attn = nn.MultiheadAttention(
+            d_model_list[0],
+            nhead_list[0],
+            kdim=d_model_list[2],
+            vdim=d_model_list[2],
+            dropout=dropout,
+            batch_first=True,
+        )
+
         self.rh_from_lh_attn = nn.MultiheadAttention(
             d_model_list[1],
             nhead_list[1],
@@ -31,10 +40,35 @@ class GlobalLayer(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
+        self.rh_from_bd_attn = nn.MultiheadAttention(
+            d_model_list[1],
+            nhead_list[1],
+            kdim=d_model_list[2],
+            vdim=d_model_list[2],
+            dropout=dropout,
+            batch_first=True,
+        )
 
-        # Fusion layer chỉ nhận đầu ra từ một chú ý chéo
+        self.bd_from_lh_attn = nn.MultiheadAttention(
+            d_model_list[2],
+            nhead_list[2],
+            kdim=d_model_list[0],
+            vdim=d_model_list[0],
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.bd_from_rh_attn = nn.MultiheadAttention(
+            d_model_list[2],
+            nhead_list[2],
+            kdim=d_model_list[1],
+            vdim=d_model_list[1],
+            dropout=dropout,
+            batch_first=True,
+        )
+
         self.norm2_lh = nn.LayerNorm(d_model_list[0])
         self.norm2_rh = nn.LayerNorm(d_model_list[1])
+        self.norm2_bd = nn.LayerNorm(d_model_list[2])
 
         # Giai đoạn 3: Feed-Forward Networks
         self.ffn_lh = nn.Sequential(
@@ -74,11 +108,23 @@ class GlobalLayer(nn.Module):
 
         # --- 2. Cross-Attention ---
         lh_from_rh, _ = self.lh_from_rh_attn(l_hand_x, r_hand_x, r_hand_x)
-        rh_from_lh, _ = self.rh_from_lh_attn(
-            query=r_hand_x, key=l_hand_x, value=l_hand_x
+        lh_from_bd, _ = self.lh_from_bd_attn(l_hand_x, body_x, body_x)
+
+        rh_from_lh, _ = self.rh_from_lh_attn(r_hand_x, l_hand_x, l_hand_x)
+        rh_from_bd, _ = self.rh_from_bd_attn(r_hand_x, body_x, body_x)
+
+        bd_from_lh, _ = self.bd_from_lh_attn(body_x, l_hand_x, l_hand_x)
+        bd_from_rh, _ = self.bd_from_rh_attn(body_x, r_hand_x, r_hand_x)
+
+        l_hand_x = self.norm2_lh(
+            l_hand_x + self.dropout(lh_from_rh) + self.dropout(lh_from_bd)
         )
-        l_hand_x = self.norm2_lh(l_hand_x + self.dropout(lh_from_rh))
-        r_hand_x = self.norm2_rh(r_hand_x + self.dropout(rh_from_lh))
+        r_hand_x = self.norm2_rh(
+            r_hand_x + self.dropout(rh_from_lh) + self.dropout(rh_from_bd)
+        )
+        body_x = self.norm2_bd(
+            body_x + self.dropout(bd_from_lh) + self.dropout(bd_from_rh)
+        )
 
         # --- 3. Feed-Forward Network ---
         l_hand_x = self.norm3_lh(l_hand_x + self.dropout(self.ffn_lh(l_hand_x)))
